@@ -3842,10 +3842,13 @@ class EmailCollector extends CommonObject
 							);
 							$reshook = $hookmanager->executeHooks('doCollectImapOneCollector', $parameters, $this, $operation['type']);
 
-							if ($reshook < 0) {
-								$errorforthisaction++;
-								$this->error = $hookmanager->resPrint;
-							}
+								if ($reshook < 0) {
+									$errorforthisaction++;
+									$this->error = $hookmanager->resPrint;
+									if (!empty($hookmanager->resPrint)) {
+										$operationslog .= '<br>Hook error: '.dol_escape_htmltag($hookmanager->resPrint);
+									}
+								}
 							if ($errorforthisaction) {
 								$errorforactions++;
 								$operationslog .= '<br>Hook doCollectImapOneCollector executed with error';
