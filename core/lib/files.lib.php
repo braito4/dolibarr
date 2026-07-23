@@ -1658,6 +1658,12 @@ function dol_delete_file($file, $disableglob = 0, $nophperrors = 0, $nohook = 0,
 	}
 
 	$reshook = 0;
+	$recordSupplierOrderDelete = (
+		is_object($object)
+		&& !empty($object->id)
+		&& (string) ($object->element ?? '') === 'order_supplier'
+		&& is_object($user)
+	);
 	if (empty($nohook) && !empty($hookmanager)) {
 		$hookmanager->initHooks(array('fileslib'));
 
@@ -1685,6 +1691,16 @@ function dol_delete_file($file, $disableglob = 0, $nophperrors = 0, $nohook = 0,
 
 			if (!empty($listofdir) && is_array($listofdir)) {
 				foreach ($listofdir as $filename) {
+					$deletedFileSize = 0;
+					$deletedFileMime = '';
+					$deletedFileSha256 = '';
+					if ($recordSupplierOrderDelete && is_file($filename)) {
+						$tmpDeletedFileSize = @filesize($filename);
+						$deletedFileSize = ($tmpDeletedFileSize !== false ? (int) $tmpDeletedFileSize : 0);
+						$deletedFileMime = (string) dol_mimetype(basename($filename));
+						$tmpDeletedFileSha256 = @hash_file('sha256', $filename);
+						$deletedFileSha256 = ($tmpDeletedFileSha256 !== false ? (string) $tmpDeletedFileSha256 : '');
+					}
 					if ($nophperrors) {
 						$ok = @unlink($filename);
 					} else {
@@ -1706,6 +1722,9 @@ function dol_delete_file($file, $disableglob = 0, $nophperrors = 0, $nohook = 0,
 					if ($ok) {
 						if (empty($nolog)) {
 							dol_syslog("Removed file ".$filename, LOG_DEBUG);
+						}
+						if ($recordSupplierOrderDelete) {
+							dol_record_supplier_order_file_delete_event($object, $user, basename($filename), $deletedFileSize, $deletedFileMime, $deletedFileSha256);
 						}
 
 						// Delete entry into ecm database
@@ -1740,6 +1759,16 @@ function dol_delete_file($file, $disableglob = 0, $nophperrors = 0, $nohook = 0,
 			}
 		} else {
 			$ok = false;
+			$deletedFileSize = 0;
+			$deletedFileMime = '';
+			$deletedFileSha256 = '';
+			if ($recordSupplierOrderDelete && is_file($file_osencoded)) {
+				$tmpDeletedFileSize = @filesize($file_osencoded);
+				$deletedFileSize = ($tmpDeletedFileSize !== false ? (int) $tmpDeletedFileSize : 0);
+				$deletedFileMime = (string) dol_mimetype(basename($file_osencoded));
+				$tmpDeletedFileSha256 = @hash_file('sha256', $file_osencoded);
+				$deletedFileSha256 = ($tmpDeletedFileSha256 !== false ? (string) $tmpDeletedFileSha256 : '');
+			}
 			if ($nophperrors) {
 				$ok = @unlink($file_osencoded);
 			} else {
@@ -1748,6 +1777,9 @@ function dol_delete_file($file, $disableglob = 0, $nophperrors = 0, $nohook = 0,
 			if ($ok) {
 				if (empty($nolog)) {
 					dol_syslog("Removed file ".$file_osencoded, LOG_DEBUG);
+				}
+				if ($recordSupplierOrderDelete) {
+					dol_record_supplier_order_file_delete_event($object, $user, basename($file_osencoded), $deletedFileSize, $deletedFileMime, $deletedFileSha256);
 				}
 			} else {
 				dol_syslog("Failed to remove file ".$file_osencoded, LOG_WARNING);
@@ -2038,6 +2070,179 @@ function dol_init_file_process($pathtoscan = '', $trackid = '')
 
 
 /**
+ * Record the successful upload of a document attached to a supplier order.
+ *
+ * @param	CommonObject	$object			Supplier order
+ * @param	User			$user			User that uploaded the file
+ * @param	string			$storedFile		Full path of the stored file
+ * @param	string			$originalName	Original name sent by the browser
+ * @param	string			$mimeType		MIME type sent by the browser
+ * @param	int<0,1>		$allowoverwrite	Whether overwrite was requested
+ * @return	int<-1,1>						1 if an event was created, 0 if not applicable, -1 on error
+ */
+function dol_record_supplier_order_file_upload_event($object, $user, $storedFile, $originalName, $mimeType, $allowoverwrite = 0)
+{
+	global $conf, $db;
+
+	if (!is_object($object) || !is_object($user) || empty($object->id)) {
+		return 0;
+	}
+	if ((string) ($object->element ?? '') !== 'order_supplier') {
+		return 0;
+	}
+
+	$storedFile = (string) $storedFile;
+	$storedName = basename($storedFile);
+	if ($storedName === '' || !is_file(dol_osencode($storedFile))) {
+		return 0;
+	}
+
+	require_once DOL_DOCUMENT_ROOT.'/comm/action/class/actioncomm.class.php';
+
+	$fileSize = @filesize(dol_osencode($storedFile));
+	$fileSize = ($fileSize !== false ? (int) $fileSize : 0);
+	$sha256 = @hash_file('sha256', dol_osencode($storedFile));
+	$extension = strtolower((string) pathinfo($storedName, PATHINFO_EXTENSION));
+	$userFullName = trim((string) $user->getFullName(null, 0));
+	$sourcePage = basename((string) ($_SERVER['SCRIPT_NAME'] ?? $_SERVER['PHP_SELF'] ?? ''));
+	$remoteIp = (string) getUserRemoteIP();
+
+	$label = 'Documento subido a pedido proveedor';
+	if (!empty($object->ref)) {
+		$label .= ' '.(string) $object->ref;
+	}
+	$label .= ': '.$storedName;
+	if (strlen($label) > 255) {
+		$label = substr($label, 0, 252).'...';
+	}
+
+	$noteLines = array(
+		'Archivo almacenado: '.$storedName,
+		'Nombre original: '.($originalName !== '' ? $originalName : $storedName),
+		'Tamaño: '.$fileSize.' bytes'.($fileSize > 0 ? ' ('.dol_print_size($fileSize, 1, 1).')' : ''),
+		'Tipo MIME: '.($mimeType !== '' ? $mimeType : 'no indicado'),
+		'Extensión: '.($extension !== '' ? $extension : 'sin extensión'),
+		'SHA-256: '.($sha256 !== false ? $sha256 : 'no disponible'),
+		'Sobrescritura solicitada: '.(!empty($allowoverwrite) ? 'sí' : 'no'),
+		'Origen: '.($sourcePage !== '' ? $sourcePage : 'cargador de documentos'),
+		'Usuario: '.($userFullName !== '' ? $userFullName : (string) $user->login).' (ID '.((int) $user->id).', login '.(string) $user->login.')',
+		'IP: '.($remoteIp !== '' ? $remoteIp : 'no disponible'),
+	);
+
+	$now = dol_now();
+	$actioncomm = new ActionComm($db);
+	$actioncomm->type_code = 'AC_OTH_AUTO';
+	$actioncomm->code = 'AC_OTH_AUTO';
+	$actioncomm->label = $label;
+	$actioncomm->email_subject = $label;
+	$actioncomm->note = implode("\n", $noteLines);
+	$actioncomm->datep = $now;
+	$actioncomm->datef = $now;
+	$actioncomm->percentage = -1;
+	$actioncomm->socid = (int) ($object->socid ?? 0);
+	$actioncomm->fk_project = (int) ($object->fk_project ?? 0);
+	$actioncomm->elementtype = 'order_supplier';
+	$actioncomm->fk_element = (int) $object->id;
+	$actioncomm->userownerid = (int) $user->id;
+	$actioncomm->authorid = (int) $user->id;
+	$actioncomm->entity = (int) ($object->entity ?? $conf->entity);
+	$actioncomm->ip = $remoteIp;
+
+	$result = $actioncomm->create($user, 1);
+	if ($result <= 0) {
+		dol_syslog(__FUNCTION__.': failed to create event for supplier order '.((int) $object->id).': '.$actioncomm->error, LOG_WARNING);
+		return -1;
+	}
+
+	return 1;
+}
+
+/**
+ * Record the successful deletion of a document attached to a supplier order.
+ *
+ * File characteristics must be collected before unlinking the file.
+ *
+ * @param	CommonObject	$object		Supplier order
+ * @param	User			$user		User that deleted the file
+ * @param	string			$fileName	Stored file name
+ * @param	int				$fileSize	File size in bytes
+ * @param	string			$mimeType	Inferred MIME type
+ * @param	string			$sha256		SHA-256 calculated before deletion
+ * @return	int<-1,1>					1 if an event was created, 0 if not applicable, -1 on error
+ */
+function dol_record_supplier_order_file_delete_event($object, $user, $fileName, $fileSize, $mimeType, $sha256)
+{
+	global $conf, $db;
+
+	if (!is_object($object) || !is_object($user) || empty($object->id)) {
+		return 0;
+	}
+	if ((string) ($object->element ?? '') !== 'order_supplier') {
+		return 0;
+	}
+
+	$fileName = basename((string) $fileName);
+	if ($fileName === '') {
+		return 0;
+	}
+
+	require_once DOL_DOCUMENT_ROOT.'/comm/action/class/actioncomm.class.php';
+
+	$fileSize = max(0, (int) $fileSize);
+	$extension = strtolower((string) pathinfo($fileName, PATHINFO_EXTENSION));
+	$userFullName = trim((string) $user->getFullName(null, 0));
+	$sourcePage = basename((string) ($_SERVER['SCRIPT_NAME'] ?? $_SERVER['PHP_SELF'] ?? ''));
+	$remoteIp = (string) getUserRemoteIP();
+
+	$label = 'Documento eliminado de pedido proveedor';
+	if (!empty($object->ref)) {
+		$label .= ' '.(string) $object->ref;
+	}
+	$label .= ': '.$fileName;
+	if (strlen($label) > 255) {
+		$label = substr($label, 0, 252).'...';
+	}
+
+	$noteLines = array(
+		'Archivo eliminado: '.$fileName,
+		'Tamaño anterior: '.$fileSize.' bytes'.($fileSize > 0 ? ' ('.dol_print_size($fileSize, 1, 1).')' : ''),
+		'Tipo MIME: '.($mimeType !== '' ? $mimeType : 'no indicado'),
+		'Extensión: '.($extension !== '' ? $extension : 'sin extensión'),
+		'SHA-256 anterior: '.($sha256 !== '' ? $sha256 : 'no disponible'),
+		'Origen: '.($sourcePage !== '' ? $sourcePage : 'gestor de documentos'),
+		'Usuario: '.($userFullName !== '' ? $userFullName : (string) $user->login).' (ID '.((int) $user->id).', login '.(string) $user->login.')',
+		'IP: '.($remoteIp !== '' ? $remoteIp : 'no disponible'),
+	);
+
+	$now = dol_now();
+	$actioncomm = new ActionComm($db);
+	$actioncomm->type_code = 'AC_OTH_AUTO';
+	$actioncomm->code = 'AC_OTH_AUTO';
+	$actioncomm->label = $label;
+	$actioncomm->email_subject = $label;
+	$actioncomm->note = implode("\n", $noteLines);
+	$actioncomm->datep = $now;
+	$actioncomm->datef = $now;
+	$actioncomm->percentage = -1;
+	$actioncomm->socid = (int) ($object->socid ?? 0);
+	$actioncomm->fk_project = (int) ($object->fk_project ?? 0);
+	$actioncomm->elementtype = 'order_supplier';
+	$actioncomm->fk_element = (int) $object->id;
+	$actioncomm->userownerid = (int) $user->id;
+	$actioncomm->authorid = (int) $user->id;
+	$actioncomm->entity = (int) ($object->entity ?? $conf->entity);
+	$actioncomm->ip = $remoteIp;
+
+	$result = $actioncomm->create($user, 1);
+	if ($result <= 0) {
+		dol_syslog(__FUNCTION__.': failed to create event for supplier order '.((int) $object->id).': '.$actioncomm->error, LOG_WARNING);
+		return -1;
+	}
+
+	return 1;
+}
+
+/**
  * Get and save an upload file (for example after submitting a new file in a mail form).
  * The database index of the file is also updated if $updatesessionordb is set to 1.
  * Function can work in 2 mode, one to get file from $_FILES, one to get file from its full path.
@@ -2212,6 +2417,16 @@ function dol_add_file_process($upload_dir, $allowoverwrite = 0, $updatesessionor
 							}
 						}
 					}
+
+					$storedFileForEvent = $destfull.($resupload == 2 ? '.noexe' : '');
+					dol_record_supplier_order_file_upload_event(
+						$object,
+						$user,
+						$storedFileForEvent,
+						(string) $TFile['name'][$i],
+						(string) $TFile['type'][$i],
+						$allowoverwrite
+					);
 
 					$nbok++;
 				} else {
