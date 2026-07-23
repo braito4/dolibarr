@@ -3,6 +3,7 @@
 /conf/conf.php.sav
 /conf/conf.php.back
 /documents/
+/multicompany/
 /install.lock
 /.DS_Store
 *.log
