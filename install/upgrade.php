@@ -74,84 +74,6 @@ global $langs;
 
 $ok = 0;
 
-/**
- * Repair schema gaps found in databases that report version 23 but missed older migrations.
- *
- * @param DoliDB $db Database handler
- * @param string $migrationFile Migration filename
- * @return int<-1,1> 1 on success, -1 on error
- */
-function repairSchemaBeforeMigration($db, $migrationFile)
-{
-	if ($migrationFile !== '23.0.0-24.0.0.sql') {
-		return 1;
-	}
-
-	$columns = array(
-		MAIN_DB_PREFIX.'actioncomm' => array('max_participants' => 'integer DEFAULT NULL'),
-		MAIN_DB_PREFIX.'actioncomm_reminder' => array(
-			'fk_soc' => 'integer DEFAULT NULL',
-			'fk_contact' => 'integer DEFAULT NULL',
-		),
-		MAIN_DB_PREFIX.'blockedlog' => array(
-			'pos_source' => "varchar(32) DEFAULT ''",
-			'signature_backward' => "varchar(100) DEFAULT ''",
-			'type_code' => "varchar(8) DEFAULT ''",
-			'note' => 'varchar(128) DEFAULT NULL',
-		),
-		MAIN_DB_PREFIX.'c_country' => array(
-			'phone_code' => 'integer DEFAULT NULL',
-			'trunk_prefix' => 'varchar(5) DEFAULT NULL',
-		),
-	);
-
-	foreach ($columns as $table => $tableColumns) {
-		$existingColumns = array();
-		foreach ($db->DDLInfoTable($table) as $columnInfo) {
-			$existingColumns[strtolower($columnInfo[0])] = true;
-		}
-		foreach ($tableColumns as $column => $definition) {
-			if (empty($existingColumns[strtolower($column)])) {
-				if (!$db->query('ALTER TABLE '.$table.' ADD COLUMN '.$column.' '.$definition)) {
-					return -1;
-				}
-			}
-		}
-	}
-
-	$incotermsTable = MAIN_DB_PREFIX.'c_incoterms';
-	$incotermsColumns = $db->DDLInfoTable($incotermsTable);
-	foreach ($incotermsColumns as $columnInfo) {
-		$typeMatches = array();
-		if (strtolower($columnInfo[0]) === 'code' && preg_match('/varchar\(([0-9]+)\)/i', $columnInfo[1], $typeMatches) && (int) $typeMatches[1] < 8) {
-			$sql = $db->type === 'pgsql'
-				? 'ALTER TABLE '.$incotermsTable.' ALTER COLUMN code TYPE varchar(8)'
-				: 'ALTER TABLE '.$incotermsTable.' MODIFY COLUMN code varchar(8) NOT NULL';
-			if (!$db->query($sql)) {
-				return -1;
-			}
-			break;
-		}
-	}
-
-	$mrpTableFiles = array(
-		'llx_mrp_mo' => 'llx_mrp_mo-mrp.sql',
-		'llx_mrp_mo_extrafields' => 'llx_mrp_mo_extrafields-mrp.sql',
-		'llx_mrp_production' => 'llx_mrp_production-mrp.sql',
-		'llx_mrp_production_extrafields' => 'llx_mrp_production_extrafields-mrp.sql',
-	);
-	foreach ($mrpTableFiles as $table => $tableFile) {
-		$table = MAIN_DB_PREFIX.substr($table, 4);
-		if (count($db->DDLListTables($db->database_name, $table)) === 0) {
-			if (run_sql(__DIR__.'/mysql/tables/'.$tableFile, 0, 0, 1, '', 'default', 32768, 0, 0, 2, 0, $db->database_name) <= 0) {
-				return -1;
-			}
-		}
-	}
-
-	return 1;
-}
-
 
 // Cette page peut etre longue. On augmente le delai autorise.
 // Ne fonctionne que si on est pas en safe_mode.
@@ -452,12 +374,6 @@ if (!GETPOST('action', 'aZ09') || preg_match('/upgrade/i', GETPOST('action', 'aZ
 
 				print '<tr><td colspan="2"><hr style="border-color: #ccc; border-top-style: none;"></td></tr>';
 				print '<tr><td class="nowrap">'.$langs->trans("ChoosedMigrateScript").'</td><td class="right">'.$file.'</td></tr>'."\n";
-
-				$ok = repairSchemaBeforeMigration($db, $file);
-				if ($ok < 0) {
-					print '<tr><td colspan="2"><span class="error">'.dol_escape_htmltag($db->lasterror()).'</span></td></tr>'."\n";
-					break;
-				}
 
 				// Run sql script
 				$ok = run_sql($dir.$file, 0, 0, 1, '', 'default', 32768, 0, 0, 2, 0, $db->database_name);
