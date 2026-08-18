@@ -35,6 +35,10 @@ class Dolresource extends CommonObject
 {
 	use CommonPeople;
 
+	public const STATUS_UNKNOWN = 0;
+	public const STATUS_FREE = 1;
+	public const STATUS_OUT_OF_SERVICE = 2;
+
 	/**
 	 * @var string ID to identify managed object
 	 */
@@ -112,6 +116,11 @@ class Dolresource extends CommonObject
 	public $mandatory;
 
 	/**
+	 * @var float Resource quantity consumed by one service unit
+	 */
+	public $users_per_service_unit;
+
+	/**
 	 * @var int
 	 */
 	public $fulldayevent;
@@ -140,7 +149,7 @@ class Dolresource extends CommonObject
 	public function __construct(DoliDB $db)
 	{
 		$this->db = $db;
-		$this->status = 0;
+		$this->status = self::STATUS_FREE;
 
 		$this->cache_code_type_resource = array();
 	}
@@ -198,7 +207,8 @@ class Dolresource extends CommonObject
 		$sql .= "url,";
 		$sql .= "fk_code_type_resource,";
 		$sql .= "note_public,";
-		$sql .= "note_private, ";
+		$sql .= "note_private,";
+		$sql .= "fk_statut, ";
 		$sql .= "datec, ";
 		$sql .= "fk_user_author ";
 		$sql .= ") VALUES (";
@@ -206,6 +216,7 @@ class Dolresource extends CommonObject
 		foreach ($new_resource_values as $value) {
 			$sql .= " " . (!empty($value) ? "'" . $this->db->escape($value) . "'" : 'NULL') . ",";
 		}
+		$sql .= " ".((int) $this->status).",";
 		$sql .= " '" . $this->db->idate($this->date_creation) . "',";
 		$sql .= " " . (!empty($user->id) ? ((int) $user->id) : "null");
 		$sql .= ")";
@@ -280,6 +291,7 @@ class Dolresource extends CommonObject
 		$sql .= " t.max_users,";
 		$sql .= " t.url,";
 		$sql .= " t.fk_code_type_resource,";
+		$sql .= " t.fk_statut,";
 		$sql .= " t.note_public,";
 		$sql .= " t.note_private,";
 		$sql .= " t.tms as date_modification,";
@@ -313,6 +325,7 @@ class Dolresource extends CommonObject
 				$this->max_users = $obj->max_users;
 				$this->url = $obj->url;
 				$this->fk_code_type_resource = $obj->fk_code_type_resource;
+				$this->status = (int) $obj->fk_statut;
 				$this->note_public = $obj->note_public;
 				$this->note_private = $obj->note_private;
 				$this->date_creation     = $this->db->jdate($obj->date_creation);
@@ -407,6 +420,7 @@ class Dolresource extends CommonObject
 		$sql .= " max_users=".(isset($this->max_users) ? (int) $this->max_users : "null").",";
 		$sql .= " url=".(isset($this->url) ? "'".$this->db->escape($this->url)."'" : "null").",";
 		$sql .= " fk_code_type_resource=".(isset($this->fk_code_type_resource) ? "'".$this->db->escape($this->fk_code_type_resource)."'" : "null").",";
+		$sql .= " fk_statut=".((int) $this->status).",";
 		$sql .= " note_public=".(isset($this->note_public) ? "'".$this->db->escape($this->note_public)."'" : "null").",";
 		$sql .= " note_private=".(isset($this->note_private) ? "'".$this->db->escape($this->note_private)."'" : "null").",";
 		$sql .= " tms=" . ("'" . $this->db->idate($this->date_modification) . "',");
@@ -487,6 +501,7 @@ class Dolresource extends CommonObject
 		$sql .= " t.element_type,";
 		$sql .= " t.busy,";
 		$sql .= " t.mandatory,";
+		$sql .= " t.users_per_service_unit,";
 		$sql .= " t.fk_user_create,";
 		$sql .= " t.tms as date_modification";
 		$sql .= " FROM ".MAIN_DB_PREFIX."element_resources as t";
@@ -505,6 +520,7 @@ class Dolresource extends CommonObject
 				$this->element_type		= $obj->element_type;
 				$this->busy = $obj->busy;
 				$this->mandatory = $obj->mandatory;
+				$this->users_per_service_unit = (float) $obj->users_per_service_unit;
 				$this->fk_user_create = $obj->fk_user_create;
 				$this->date_modification = $obj->date_modification;
 
@@ -748,6 +764,9 @@ class Dolresource extends CommonObject
 		if (isset($this->mandatory)) {
 			$this->mandatory = (int) $this->mandatory;
 		}
+		if (isset($this->users_per_service_unit)) {
+			$this->users_per_service_unit = (float) $this->users_per_service_unit;
+		}
 
 		// Update request
 		$sql = "UPDATE ".MAIN_DB_PREFIX."element_resources SET";
@@ -757,6 +776,7 @@ class Dolresource extends CommonObject
 		$sql .= " element_type = ".(isset($this->element_type) ? "'".$this->db->escape($this->element_type)."'" : "null").",";
 		$sql .= " busy = ".(isset($this->busy) ? (int) $this->busy : "null").",";
 		$sql .= " mandatory = ".(isset($this->mandatory) ? (int) $this->mandatory : "null").",";
+		$sql .= " users_per_service_unit = ".(isset($this->users_per_service_unit) ? price2num($this->users_per_service_unit, 'MS') : "null").",";
 		$sql .= " tms = ".(dol_strlen((string) $this->date_modification) != 0 ? "'".$this->db->idate($this->date_modification)."'" : 'null');
 		$sql .= " WHERE rowid=".((int) $this->id);
 
@@ -801,18 +821,18 @@ class Dolresource extends CommonObject
 	 * @param	string		$element			Element
 	 * @param	int			$element_id			Id
 	 * @param	string		$resource_type		Type
-	 * @return	array<array{rowid:int,resource_id:int,resource_type:string,busy:int<0,1>,mandatory:int<0,1>}>	Array of resources
+	 * @return	array<array{rowid:int,resource_id:int,resource_type:string,busy:int<0,1>,mandatory:int<0,1>,position:int,users_per_service_unit:float}>	Array of resources
 	 */
 	public function getElementResources(string $element, int $element_id, string $resource_type = '')
 	{
 		// Links between objects are stored in this table
-		$sql = 'SELECT rowid, resource_id, resource_type, busy, mandatory';
+		$sql = 'SELECT rowid, resource_id, resource_type, busy, mandatory, position, users_per_service_unit';
 		$sql .= ' FROM '.MAIN_DB_PREFIX.'element_resources';
 		$sql .= " WHERE element_id=".((int) $element_id)." AND element_type='".$this->db->escape($element)."'";
 		if ($resource_type) {
 			$sql .= " AND resource_type LIKE '%".$this->db->escape($resource_type)."%'";
 		}
-		$sql .= ' ORDER BY resource_type';
+		$sql .= ' ORDER BY resource_type, position, rowid';
 
 		dol_syslog(get_class($this)."::getElementResources", LOG_DEBUG);
 
@@ -829,7 +849,9 @@ class Dolresource extends CommonObject
 					'resource_id' => $obj->resource_id,
 					'resource_type' => $obj->resource_type,
 					'busy' => $obj->busy,
-					'mandatory' => $obj->mandatory
+					'mandatory' => $obj->mandatory,
+					'position' => (int) $obj->position,
+					'users_per_service_unit' => (float) $obj->users_per_service_unit
 				);
 				$i++;
 			}
@@ -1022,7 +1044,93 @@ class Dolresource extends CommonObject
 	 */
 	public static function getLibStatusLabel(int $status, int $mode = 0)
 	{
-		return '';
+		global $langs;
+		$langs->load('resource');
+		$labels = self::getStatusArray();
+		$label = $labels[$status] ?? $labels[self::STATUS_UNKNOWN];
+		$statusType = 'status1';
+		if ($status === self::STATUS_FREE) {
+			$statusType = 'status4';
+		} elseif ($status === self::STATUS_OUT_OF_SERVICE) {
+			$statusType = 'status8';
+		}
+		return dolGetStatus($label, $label, '', $statusType, $mode);
+	}
+
+	/**
+	 * Return available manual resource statuses.
+	 * Busy is deliberately excluded because it is calculated for a time range.
+	 *
+	 * @return array<int,string>
+	 */
+	public static function getStatusArray()
+	{
+		global $langs;
+		$langs->load('resource');
+		return array(
+			self::STATUS_UNKNOWN => $langs->trans('ResourceStatusUnknown'),
+			self::STATUS_FREE => $langs->trans('ResourceStatusFree'),
+			self::STATUS_OUT_OF_SERVICE => $langs->trans('ResourceStatusOutOfService'),
+		);
+	}
+
+	/**
+	 * Check whether an internal user or external contact is in charge of the resource.
+	 *
+	 * @return bool
+	 */
+	public function hasStatusProvider()
+	{
+		$sql = 'SELECT COUNT(ec.rowid) as nb';
+		$sql .= ' FROM '.MAIN_DB_PREFIX.'element_contact ec';
+		$sql .= ' INNER JOIN '.MAIN_DB_PREFIX.'c_type_contact tc ON tc.rowid = ec.fk_c_type_contact';
+		$sql .= ' WHERE ec.element_id = '.((int) $this->id);
+		$sql .= " AND tc.element = 'dolresource'";
+		$sql .= " AND tc.code IN ('USERINCHARGE', 'THIRDINCHARGE')";
+		$resql = $this->db->query($sql);
+		if ($resql && ($obj = $this->db->fetch_object($resql))) {
+			return ((int) $obj->nb) > 0;
+		}
+		return false;
+	}
+
+	/**
+	 * Return confirmed occupied capacity for a time range.
+	 *
+	 * @param string|null $dateStart Start date in database format
+	 * @param string|null $dateEnd End date in database format
+	 * @return float
+	 */
+	public function getOccupiedCapacity($dateStart = null, $dateEnd = null)
+	{
+		$sql = 'SELECT COALESCE(SUM(capacity_used), 0) as occupied';
+		$sql .= ' FROM '.MAIN_DB_PREFIX.'element_resources';
+		$sql .= ' WHERE resource_id = '.((int) $this->id);
+		$sql .= " AND resource_type = 'dolresource'";
+		$sql .= " AND reservation_status = 'confirmed'";
+		if (!empty($dateStart)) {
+			$sql .= " AND (date_end IS NULL OR date_end >= '".$this->db->escape($dateStart)."')";
+		}
+		if (!empty($dateEnd)) {
+			$sql .= " AND (date_start IS NULL OR date_start <= '".$this->db->escape($dateEnd)."')";
+		}
+		$resql = $this->db->query($sql);
+		if ($resql && ($obj = $this->db->fetch_object($resql))) {
+			return (float) $obj->occupied;
+		}
+		return 0.0;
+	}
+
+	/**
+	 * Check whether confirmed reservations fill the resource for a time range.
+	 *
+	 * @param string|null $dateStart Start date in database format
+	 * @param string|null $dateEnd End date in database format
+	 * @return bool
+	 */
+	public function isBusy($dateStart = null, $dateEnd = null)
+	{
+		return $this->max_users > 0 && $this->getOccupiedCapacity($dateStart, $dateEnd) >= (float) $this->max_users;
 	}
 
 	/**

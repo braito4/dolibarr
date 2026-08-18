@@ -43,6 +43,7 @@ if (empty($conf) || !is_object($conf)) {
 
 
 $form = new Form($db);
+$isProductResourceList = ($element == 'product' || $element == 'service');
 
 
 print '<div class="tagtable centpercent noborder allwidth">';
@@ -50,10 +51,17 @@ print '<div class="tagtable centpercent noborder allwidth">';
 print '<form method="POST" class="tagtable centpercent noborder borderbottom allwidth">';
 
 print '<div class="tagtr liste_titre">';
+if ($isProductResourceList) {
+	print '<div class="tagtd liste_titre center">'.$langs->trans('Priority').'</div>';
+}
 print '<div class="tagtd liste_titre">'.$langs->trans('Resource').'</div>';
 print '<div class="tagtd liste_titre">'.$langs->trans('Type').'</div>';
-print '<div class="tagtd liste_titre center">'.$langs->trans('Busy').'</div>';
-print '<div class="tagtd liste_titre center">'.$langs->trans('Mandatory').'</div>';
+if ($isProductResourceList) {
+	print '<div class="tagtd liste_titre right">'.$langs->trans('UsersPerServiceUnit').'</div>';
+} else {
+	print '<div class="tagtd liste_titre center">'.$langs->trans('Busy').'</div>';
+	print '<div class="tagtd liste_titre center">'.$langs->trans('Mandatory').'</div>';
+}
 print '<div class="tagtd liste_titre"></div>';
 print '</div>';
 
@@ -63,7 +71,10 @@ print '<input type="hidden" name="action" value="update_linked_resource" />';
 print '<input type="hidden" name="resource_type" value="'.$resource_type.'" />';
 
 if ((array) $linked_resources && count($linked_resources) > 0) {
+	$resourceIndex = 0;
+	$resourceCount = count($linked_resources);
 	foreach ($linked_resources as $linked_resource) {
+		$resourceIndex++;
 		$object_resource = fetchObjectByElement($linked_resource['resource_id'], $linked_resource['resource_type']);
 
 		//$element_id = $linked_resource['rowid'];
@@ -74,10 +85,17 @@ if ((array) $linked_resources && count($linked_resources) > 0) {
 			print '<input type="hidden" name="element" value="'.$element.'" />';
 			print '<input type="hidden" name="element_id" value="'.$element_id.'" />';
 
+			if ($isProductResourceList) {
+				print '<div class="tagtd center">'.$resourceIndex.'</div>';
+			}
 			print '<div class="tagtd">'.$object_resource->getNomUrl(1).'</div>';
 			print '<div class="tagtd">'.$object_resource->type_label.'</div>';
-			print '<div class="tagtd center">'.$form->selectyesno('busy', $linked_resource['busy'] ? 1 : 0, 1).'</div>';
-			print '<div class="tagtd center">'.$form->selectyesno('mandatory', $linked_resource['mandatory'] ? 1 : 0, 1).'</div>';
+			if ($isProductResourceList) {
+				print '<div class="tagtd right"><input type="text" class="width75 right" name="users_per_service_unit" value="'.price($linked_resource['users_per_service_unit']).'" required></div>';
+			} else {
+				print '<div class="tagtd center">'.$form->selectyesno('busy', $linked_resource['busy'] ? 1 : 0, 1).'</div>';
+				print '<div class="tagtd center">'.$form->selectyesno('mandatory', $linked_resource['mandatory'] ? 1 : 0, 1).'</div>';
+			}
 			print '<div class="tagtd right"><input type="submit" class="button" value="'.$langs->trans("Update").'"></div>';
 			print '</div>';
 		} else {
@@ -88,6 +106,10 @@ if ((array) $linked_resources && count($linked_resources) > 0) {
 
 			print '<div class="tagtr oddeven'.($class ? ' '.$class : '').'">';
 
+			if ($isProductResourceList) {
+				print '<div class="tagtd center">'.$resourceIndex.'</div>';
+			}
+
 			print '<div class="tagtd">';
 			print $object_resource->getNomUrl(1);
 			print '</div>';
@@ -96,18 +118,32 @@ if ((array) $linked_resources && count($linked_resources) > 0) {
 			print $object_resource->type_label;
 			print '</div>';
 
-			print '<div class="tagtd center">';
-			print yn($linked_resource['busy']);
-			print '</div>';
+			if (!$isProductResourceList) {
+				print '<div class="tagtd center">';
+				print yn($linked_resource['busy']);
+				print '</div>';
 
-			print '<div class="tagtd center">';
-			print yn($linked_resource['mandatory']);
-			print '</div>';
+				print '<div class="tagtd center">';
+				print yn($linked_resource['mandatory']);
+				print '</div>';
+			} else {
+				print '<div class="tagtd right">'.price($linked_resource['users_per_service_unit']).'</div>';
+			}
 
 			print '<div class="tagtd right">';
-			print '<a class="editfielda marginleftonly marginrightonly" href="'.$_SERVER['PHP_SELF'].'?mode=edit&token='.newToken().'&resource_type='.$linked_resource['resource_type'].'&element='.$element.'&element_id='.$element_id.'&lineid='.$linked_resource['rowid'].'">';
-			print img_edit();
-			print '</a>';
+			if ($isProductResourceList) {
+				print '<a class="editfielda marginleftonly marginrightonly" href="'.$_SERVER['PHP_SELF'].'?mode=edit&token='.newToken().'&resource_type='.$linked_resource['resource_type'].'&element='.$element.'&element_id='.$element_id.'&lineid='.$linked_resource['rowid'].'">'.img_edit().'</a>';
+				if ($resourceIndex > 1) {
+					print '<a class="lineupdown reposition marginleftonly marginrightonly" href="'.$_SERVER['PHP_SELF'].'?action=move_resource&direction=up&token='.newToken().'&resource_type='.$linked_resource['resource_type'].'&element='.$element.'&element_id='.$element_id.'&lineid='.$linked_resource['rowid'].'">'.img_up('default', 0, 'imgupforline').'</a>';
+				}
+				if ($resourceIndex < $resourceCount) {
+					print '<a class="lineupdown reposition marginleftonly marginrightonly" href="'.$_SERVER['PHP_SELF'].'?action=move_resource&direction=down&token='.newToken().'&resource_type='.$linked_resource['resource_type'].'&element='.$element.'&element_id='.$element_id.'&lineid='.$linked_resource['rowid'].'">'.img_down('default', 0, 'imgdownforline').'</a>';
+				}
+			} else {
+				print '<a class="editfielda marginleftonly marginrightonly" href="'.$_SERVER['PHP_SELF'].'?mode=edit&token='.newToken().'&resource_type='.$linked_resource['resource_type'].'&element='.$element.'&element_id='.$element_id.'&lineid='.$linked_resource['rowid'].'">';
+				print img_edit();
+				print '</a>';
+			}
 			print '&nbsp;';
 			print '<a class="marginleftonly marginrightonly" href="'.$_SERVER['PHP_SELF'].'?action=delete_resource&token='.newToken().'&id='.$linked_resource['resource_id'].'&element='.$element.'&element_id='.$element_id.'&lineid='.$linked_resource['rowid'].'">';
 			print img_picto($langs->trans("Unlink"), 'unlink');
@@ -119,11 +155,16 @@ if ((array) $linked_resources && count($linked_resources) > 0) {
 	}
 } else {
 	print '<div class="tagtr oddeven">';
+	if ($isProductResourceList) {
+		print '<div class="tagtd opacitymedium"></div>';
+	}
 	print '<div class="tagtd opacitymedium">'.$langs->trans('NoResourceLinked').'</div>';
 	print '<div class="tagtd opacitymedium"></div>';
 	print '<div class="tagtd opacitymedium"></div>';
 	print '<div class="tagtd opacitymedium"></div>';
-	print '<div class="tagtd opacitymedium"></div>';
+	if (!$isProductResourceList) {
+		print '<div class="tagtd opacitymedium"></div>';
+	}
 	print '</div>';
 }
 

@@ -26,6 +26,14 @@ CREATE TABLE llx_element_resources
   resource_type	  varchar(64),		-- resource or user
   busy			  integer,
   mandatory		  integer,
+	position		  integer DEFAULT 0,
+	users_per_service_unit real DEFAULT NULL,
+	service_quantity real DEFAULT NULL,
+	service_duration varchar(16) DEFAULT NULL,
+	capacity_used real DEFAULT NULL,
+	date_start datetime DEFAULT NULL,
+	date_end datetime DEFAULT NULL,
+	reservation_status varchar(16) DEFAULT NULL,
   duree				real,               -- total duration of using ressource
   fk_user_create  integer,
   tms             timestamp DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP

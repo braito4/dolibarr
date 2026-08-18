@@ -70,14 +70,18 @@ $out .= img_picto('', 'resource', 'class="pictofixedwidth"');
 $out .= $formresources->select_resource_list(0, 'fk_resource', '', 1, 1, 0, $events, '', 2, 0);
 $out .= '</div>';
 
-$out .= '<div class="divsearchfield paddingtop paddingbottom valignmiddle inline-block marginleftonly"><label for="resbusy">'.$langs->trans('Busy').'</label> ';
-//$out .= $form->selectyesno('busy', (GETPOSTISSET('busy') ? GETPOST('busy') : 1), 1);
-$out .= '<input type="checkbox" id="resbusy" name="busy" value="1"'.(GETPOSTISSET('fk_resource') ? (GETPOST('busy') ? ' checked' : '') : ' checked').'>';
-$out .= '</div>';
-$out .= '<div class="divsearchfield paddingtop paddingbottom valignmiddle inline-block marginleftonly"><label for="resmandatory">'.$langs->trans('Mandatory').'</label> ';
-//$out .= $form->selectyesno('mandatory', (GETPOSTISSET('mandatory') ? GETPOST('mandatory') : 0), 1);
-$out .= '<input type="checkbox" id="resmandatory" name="mandatory" value="1"'.(GETPOSTISSET('fk_resource') ? (GETPOST('mandatory') ? ' checked' : '') : ' checked').'>';
-$out .= '</div>';
+if ($element != 'product' && $element != 'service') {
+	$out .= '<div class="divsearchfield paddingtop paddingbottom valignmiddle inline-block marginleftonly"><label for="resbusy">'.$langs->trans('Busy').'</label> ';
+	$out .= '<input type="checkbox" id="resbusy" name="busy" value="1"'.(GETPOSTISSET('fk_resource') ? (GETPOST('busy') ? ' checked' : '') : ' checked').'>';
+	$out .= '</div>';
+	$out .= '<div class="divsearchfield paddingtop paddingbottom valignmiddle inline-block marginleftonly"><label for="resmandatory">'.$langs->trans('Mandatory').'</label> ';
+	$out .= '<input type="checkbox" id="resmandatory" name="mandatory" value="1"'.(GETPOSTISSET('fk_resource') ? (GETPOST('mandatory') ? ' checked' : '') : ' checked').'>';
+	$out .= '</div>';
+	} else {
+	$out .= '<div class="divsearchfield paddingtop paddingbottom valignmiddle inline-block marginleftonly"><label class="fieldrequired" for="users_per_service_unit">'.$langs->trans('UsersPerServiceUnit').'</label> ';
+	$out .= '<input type="text" class="width75 right" id="users_per_service_unit" name="users_per_service_unit" value="'.dol_escape_htmltag(GETPOST('users_per_service_unit', 'alpha')).'" required>';
+	$out .= '</div>';
+}
 
 $out .= '<div class="divsearchfield paddingtop paddingbottom valignmiddle inline-block right">';
 $out .= '<input type="submit" id="add-resource-place" class="button button-add small" value="'.$langs->trans("Add").'"/>';

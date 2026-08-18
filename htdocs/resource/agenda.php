@@ -46,7 +46,7 @@ require_once DOL_DOCUMENT_ROOT.'/resource/class/dolresource.class.php';
  */
 
 // Load translation files required by the page
-$langs->load('companies');
+$langs->loadLangs(array('companies', 'resource'));
 
 // Get parameters
 $id         = GETPOSTINT('id');
@@ -175,6 +175,69 @@ if ($object->id > 0) {
 	print '</div>';
 
 	print dol_get_fiche_end();
+
+	// Reservations inherited from proposal and contract service lines.
+	$sql = "SELECT er.rowid, er.element_type, er.element_id, er.service_quantity, er.service_duration, er.capacity_used,";
+	$sql .= " er.date_start, er.date_end, er.reservation_status,";
+	$sql .= " p.rowid as document_id, p.ref as document_ref, pd.fk_product, prod.ref as service_ref";
+	$sql .= " FROM ".MAIN_DB_PREFIX."element_resources er";
+	$sql .= " INNER JOIN ".MAIN_DB_PREFIX."propaldet pd ON pd.rowid = er.element_id AND er.element_type = 'propaldet'";
+	$sql .= " INNER JOIN ".MAIN_DB_PREFIX."propal p ON p.rowid = pd.fk_propal";
+	$sql .= " LEFT JOIN ".MAIN_DB_PREFIX."product prod ON prod.rowid = pd.fk_product";
+	$sql .= " WHERE er.resource_id = ".((int) $object->id)." AND er.resource_type = 'dolresource'";
+	$sql .= " UNION ALL ";
+	$sql .= "SELECT er.rowid, er.element_type, er.element_id, er.service_quantity, er.service_duration, er.capacity_used,";
+	$sql .= " er.date_start, er.date_end, er.reservation_status,";
+	$sql .= " c.rowid as document_id, c.ref as document_ref, cd.fk_product, prod.ref as service_ref";
+	$sql .= " FROM ".MAIN_DB_PREFIX."element_resources er";
+	$sql .= " INNER JOIN ".MAIN_DB_PREFIX."contratdet cd ON cd.rowid = er.element_id AND er.element_type = 'contratdet'";
+	$sql .= " INNER JOIN ".MAIN_DB_PREFIX."contrat c ON c.rowid = cd.fk_contrat";
+	$sql .= " LEFT JOIN ".MAIN_DB_PREFIX."product prod ON prod.rowid = cd.fk_product";
+	$sql .= " WHERE er.resource_id = ".((int) $object->id)." AND er.resource_type = 'dolresource'";
+	$sql .= " ORDER BY date_start DESC, rowid DESC";
+	$resql = $db->query($sql);
+
+	print_barre_liste($langs->trans('ResourceReservations'), 0, $_SERVER['PHP_SELF'], '', '', '', '', 0, -1, '', 0, '', '', 0, 1, 1);
+	print '<div class="div-table-responsive">';
+	print '<table class="noborder centpercent">';
+	print '<tr class="liste_titre">';
+	print '<th>'.$langs->trans('Type').'</th>';
+	print '<th>'.$langs->trans('Ref').'</th>';
+	print '<th>'.$langs->trans('Service').'</th>';
+	print '<th class="right">'.$langs->trans('Qty').'</th>';
+	print '<th>'.$langs->trans('ServiceDuration').'</th>';
+	print '<th class="right">'.$langs->trans('Capacity').'</th>';
+	print '<th>'.$langs->trans('DateStart').'</th>';
+	print '<th>'.$langs->trans('DateEnd').'</th>';
+	print '<th>'.$langs->trans('Status').'</th>';
+	print '</tr>';
+	$reservationCount = 0;
+	if ($resql) {
+		while ($reservation = $db->fetch_object($resql)) {
+			$reservationCount++;
+			$isProposalReservation = ($reservation->element_type === 'propaldet');
+			$documentUrl = $isProposalReservation ? '/comm/propal/card.php?id=' : '/contrat/card.php?id=';
+			$isUnavailable = ($reservation->reservation_status === 'unavailable');
+			print '<tr class="oddeven'.($isUnavailable ? ' error' : '').'">';
+			print '<td>'.img_picto('', $isProposalReservation ? 'propal' : 'contract', 'class="pictofixedwidth"').$langs->trans($isProposalReservation ? 'Proposal' : 'Contract').'</td>';
+			print '<td><a href="'.DOL_URL_ROOT.$documentUrl.((int) $reservation->document_id).'">'.dol_escape_htmltag($reservation->document_ref).'</a></td>';
+			print '<td>'.dol_escape_htmltag($reservation->service_ref).'</td>';
+			print '<td class="right">'.price($reservation->service_quantity).'</td>';
+			print '<td>'.dol_escape_htmltag($reservation->service_duration).'</td>';
+			print '<td class="right">'.price($reservation->capacity_used).'</td>';
+			print '<td>'.(!empty($reservation->date_start) ? dol_print_date($db->jdate($reservation->date_start), 'dayhour') : '').'</td>';
+			print '<td>'.(!empty($reservation->date_end) ? dol_print_date($db->jdate($reservation->date_end), 'dayhour') : '').'</td>';
+			$statusClass = $isUnavailable ? '8' : ($reservation->reservation_status === 'confirmed' ? '4' : '1');
+			$statusLabel = $isUnavailable ? 'UnavailableReservation' : ($reservation->reservation_status === 'confirmed' ? 'ConfirmedReservation' : 'ProvisionalReservation');
+			print '<td><span class="badge badge-status'.$statusClass.'">'.$langs->trans($statusLabel).'</span></td>';
+			print '</tr>';
+		}
+	}
+	if (!$reservationCount) {
+		print '<tr class="oddeven"><td colspan="9"><span class="opacitymedium">'.$langs->trans('None').'</span></td></tr>';
+	}
+	print '</table>';
+	print '</div>';
 
 	if (isModEnabled('agenda') && ($user->hasRight('agenda', 'myactions', 'read') || $user->hasRight('agenda', 'allactions', 'read'))) {
 		$param = '&id='.$object->id;

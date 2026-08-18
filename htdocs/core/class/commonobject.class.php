@@ -6064,13 +6064,29 @@ abstract class CommonObject
 	 *	@param		int		$busy				Busy or not
 	 *	@param		int		$mandatory			Mandatory or not
 	 *  @param		int		$notrigger			Disable all triggers
+	 *  @param		int		$position			Preference position (0 = append)
+	 *  @param		float	$usersPerServiceUnit	Number of resource users consumed by one service unit
 	 *	@return		int							Return integer <=0 if KO, >0 if OK
 	 */
-	public function add_element_resource($resource_id, $resource_type, $busy = 0, $mandatory = 0, $notrigger = 0)
+	public function add_element_resource($resource_id, $resource_type, $busy = 0, $mandatory = 0, $notrigger = 0, $position = 0, $usersPerServiceUnit = 0.0)
 	{
 		// phpcs:enable
 		global $user;
 		$this->db->begin();
+
+		if ($position <= 0) {
+			$sql = "SELECT COALESCE(MAX(position), 0) + 1 AS next_position";
+			$sql .= " FROM ".$this->db->prefix()."element_resources";
+			$sql .= " WHERE element_id = ".((int) $this->id);
+			$sql .= " AND element_type = '".$this->db->escape($this->element)."'";
+			$sql .= " AND resource_type = '".$this->db->escape($resource_type)."'";
+			$resql = $this->db->query($sql);
+			if ($resql && ($obj = $this->db->fetch_object($resql))) {
+				$position = (int) $obj->next_position;
+			} else {
+				$position = 1;
+			}
+		}
 
 		$sql = "INSERT INTO ".$this->db->prefix()."element_resources (";
 		$sql .= "resource_id";
@@ -6079,6 +6095,8 @@ abstract class CommonObject
 		$sql .= ", element_type";
 		$sql .= ", busy";
 		$sql .= ", mandatory";
+		$sql .= ", position";
+		$sql .= ", users_per_service_unit";
 		$sql .= ") VALUES (";
 		$sql .= ((int) $resource_id);
 		$sql .= ", '".$this->db->escape($resource_type)."'";
@@ -6086,6 +6104,8 @@ abstract class CommonObject
 		$sql .= ", '".$this->db->escape($this->element)."'";
 		$sql .= ", '".$this->db->escape((string) $busy)."'";
 		$sql .= ", '".$this->db->escape((string) $mandatory)."'";
+		$sql .= ", ".((int) $position);
+		$sql .= ", ".price2num($usersPerServiceUnit, 'MS');
 		$sql .= ")";
 
 		dol_syslog(get_class($this)."::add_element_resource", LOG_DEBUG);

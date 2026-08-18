@@ -77,6 +77,8 @@ $mandatory              = GETPOSTINT('mandatory');
 $cancel                 = GETPOST('cancel', 'alpha');
 $confirm                = GETPOST('confirm', 'alpha');
 $socid                  = GETPOSTINT('socid');
+$direction              = GETPOST('direction', 'alpha');
+$users_per_service_unit = (float) price2num(GETPOST('users_per_service_unit', 'alpha'), 'MS');
 
 if (empty($mandatory)) {
 	$mandatory = 0;
@@ -104,8 +106,11 @@ if ($element == 'fichinter') {
 if ($element == 'product' || $element == 'service') {	// When RESOURCE_ON_PRODUCTS or RESOURCE_ON_SERVICES is set
 	$tmpobject = new Product($db);
 	$tmpobject->fetch($element_id);
-	$fieldtype = $tmpobject->type;
-	$result = restrictedArea($user, 'produit|service', $element_id, 'product&product', '', '', (string) $fieldtype);
+	if ($tmpobject->type == Product::TYPE_PRODUCT) {
+		$result = restrictedArea($user, 'produit', $element_id, 'product&product');
+	} else {
+		$result = restrictedArea($user, 'service', $element_id, 'product&product');
+	}
 }
 
 // TODO
@@ -129,11 +134,49 @@ if (empty($reshook)) {
 	$error = 0;
 	$objstat = null;
 
+	if ($action == 'move_resource' && $permissiontoadd && ($element == 'product' || $element == 'service')) {
+		$sql = "SELECT rowid, position FROM ".MAIN_DB_PREFIX."element_resources";
+		$sql .= " WHERE rowid = ".((int) $lineid);
+		$sql .= " AND element_id = ".((int) $element_id);
+		$sql .= " AND element_type = '".$db->escape($element)."'";
+		$resql = $db->query($sql);
+		$current = $resql ? $db->fetch_object($resql) : null;
+		if ($current) {
+			$operator = ($direction == 'up' ? '<' : '>');
+			$sortorder = ($direction == 'up' ? 'DESC' : 'ASC');
+			$sql = "SELECT rowid, position FROM ".MAIN_DB_PREFIX."element_resources";
+			$sql .= " WHERE element_id = ".((int) $element_id);
+			$sql .= " AND element_type = '".$db->escape($element)."'";
+			$sql .= " AND resource_type = '".$db->escape($resource_type)."'";
+			$sql .= " AND position ".$operator." ".((int) $current->position);
+			$sql .= " ORDER BY position ".$sortorder.", rowid ".$sortorder;
+			$sql .= $db->plimit(1);
+			$resql = $db->query($sql);
+			$swap = $resql ? $db->fetch_object($resql) : null;
+			if ($swap) {
+				$db->begin();
+				$result1 = $db->query("UPDATE ".MAIN_DB_PREFIX."element_resources SET position = ".((int) $swap->position)." WHERE rowid = ".((int) $current->rowid));
+				$result2 = $db->query("UPDATE ".MAIN_DB_PREFIX."element_resources SET position = ".((int) $current->position)." WHERE rowid = ".((int) $swap->rowid));
+				if ($result1 && $result2) {
+					$db->commit();
+				} else {
+					$db->rollback();
+				}
+			}
+		}
+		header("Location: ".$_SERVER['PHP_SELF']."?element=".urlencode($element)."&element_id=".((int) $element_id));
+		exit;
+	}
+
 	if ($action == 'add_element_resource' && !$cancel && $permissiontoadd) {	// Test on permission already done in header before actions
 		$res = 0;
 		if (!($resource_id > 0)) {
 			$error++;
 			setEventMessages($langs->trans("ErrorFieldRequired", $langs->transnoentitiesnoconv("Resource")), null, 'errors');
+			$action = '';
+		} elseif (($element == 'product' || $element == 'service') && $users_per_service_unit <= 0) {
+			$error++;
+			setEventMessages($langs->trans('ErrorFieldRequired', $langs->transnoentitiesnoconv('UsersPerServiceUnit')), null, 'errors');
 			$action = '';
 		} else {
 			$objstat = fetchObjectByElement($element_id, $element, $element_ref);
@@ -198,7 +241,11 @@ if (empty($reshook)) {
 			}
 
 			if (!$error) {
-				$res = $objstat->add_element_resource($resource_id, $resource_type, $busy, $mandatory);
+				if ($element == 'product' || $element == 'service') {
+					$busy = 0;
+					$mandatory = 0;
+				}
+				$res = $objstat->add_element_resource($resource_id, $resource_type, $busy, $mandatory, 0, 0, $users_per_service_unit);
 			}
 		}
 
@@ -217,6 +264,14 @@ if (empty($reshook)) {
 		if ($res) {
 			$object->busy = $busy;
 			$object->mandatory = $mandatory;
+			if ($object->element_type == 'product' || $object->element_type == 'service') {
+				if ($users_per_service_unit <= 0) {
+					$error++;
+					setEventMessages($langs->trans('ErrorFieldRequired', $langs->transnoentitiesnoconv('UsersPerServiceUnit')), null, 'errors');
+				} else {
+					$object->users_per_service_unit = $users_per_service_unit;
+				}
+			}
 
 			if (getDolGlobalString('RESOURCE_USED_IN_EVENT_CHECK') && $object->objelement instanceof ActionComm && $object->element_type == 'action' && $object->resource_type == 'dolresource' && intval($object->busy) == 1) {
 				$eventDateStart = $object->objelement->datep;  // @phan-suppress-current-line PhanUndeclaredProperty

@@ -29,6 +29,7 @@
 require '../main.inc.php';
 require_once DOL_DOCUMENT_ROOT.'/contact/class/contact.class.php';
 require_once DOL_DOCUMENT_ROOT.'/resource/class/dolresource.class.php';
+require_once DOL_DOCUMENT_ROOT.'/resource/class/resourcereservationmanager.class.php';
 require_once DOL_DOCUMENT_ROOT.'/resource/class/html.formresource.class.php';
 require_once DOL_DOCUMENT_ROOT.'/core/lib/resource.lib.php';
 require_once DOL_DOCUMENT_ROOT.'/core/lib/company.lib.php';
@@ -64,6 +65,7 @@ $max_users				= GETPOSTINT('max_users');
 $url					= GETPOST('url', 'alpha');
 $confirm				= GETPOST('confirm', 'aZ09');
 $fk_code_type_resource	= GETPOST('fk_code_type_resource', 'aZ09');
+$status                 = GETPOSTISSET('status') ? GETPOSTINT('status') : Dolresource::STATUS_FREE;
 
 // Protection if external user
 if ($user->socid > 0) {
@@ -85,6 +87,8 @@ $result = restrictedArea($user, 'resource', $object->id, 'resource');
 
 $permissiontoadd = $user->hasRight('resource', 'write'); // Used by the include of actions_addupdatedelete.inc.php and actions_lineupdown.inc.php
 $permissiontodelete = $user->hasRight('resource', 'delete');
+$formconfirm = '';
+$form = new Form($db);
 
 
 /*
@@ -130,6 +134,7 @@ if (empty($reshook)) {
 				$object->max_users				= $max_users;
 				$object->url					= $url;
 				$object->fk_code_type_resource	= $fk_code_type_resource;
+				$object->status                 = $status;
 
 				// Fill array 'array_options' with data from add form
 				$ret = $extrafields->setOptionalsFromPost(null, $object);
@@ -155,6 +160,18 @@ if (empty($reshook)) {
 		}
 	}
 
+	if ($action == 'confirm_out_of_service' && $confirm === 'yes' && $permissiontoadd) {
+		$manager = new ResourceReservationManager($db);
+		$impact = $manager->previewOutOfService($id);
+		$result = $manager->applyOutOfService($id, $impact);
+		if ($result >= 0) {
+			setEventMessages($langs->trans('ResourceOutOfServiceApplied', $result), null, 'mesgs');
+			header('Location: '.$_SERVER['PHP_SELF'].'?id='.$id);
+			exit;
+		}
+		setEventMessages($langs->trans('Error'), null, 'errors');
+	}
+
 	if ($action == 'update' && !$cancel && $permissiontoadd) {
 		$error = 0;
 
@@ -168,6 +185,28 @@ if (empty($reshook)) {
 			if ($res > 0) {
 				$oldref = $object->ref;
 
+				if ($object->status === Dolresource::STATUS_FREE && $status === Dolresource::STATUS_OUT_OF_SERVICE) {
+					$manager = new ResourceReservationManager($db);
+					$impact = $manager->previewOutOfService($object->id);
+					$message = $langs->trans('ResourceOutOfServiceImpact', count($impact));
+					if ($impact) {
+						$message .= '<br><br><ul class="left">';
+						foreach ($impact as $reservation) {
+							$message .= '<li>'.dol_escape_htmltag($reservation['document_ref'].' - '.$reservation['service_ref']).': ';
+							if (!empty($reservation['replacement'])) {
+								$message .= $langs->trans('ResourceWillBeReassignedTo', dol_escape_htmltag($reservation['replacement']['ref']));
+							} else {
+								$message .= '<span class="error">'.$langs->trans('ResourceServiceWillBeUnavailable').'</span>';
+							}
+							$message .= '</li>';
+						}
+						$message .= '</ul>';
+					}
+					$formconfirm = $form->formconfirm($_SERVER['PHP_SELF'].'?id='.$object->id, $langs->trans('SetResourceOutOfService'), $message, 'confirm_out_of_service', array(), 0, 1);
+					$action = '';
+					$error++;
+				}
+
 				$object->ref          			= $ref;
 				$object->address				= $address;
 				$object->zip					= $zip;
@@ -180,6 +219,12 @@ if (empty($reshook)) {
 				$object->max_users				= $max_users;
 				$object->url					= $url;
 				$object->fk_code_type_resource  = $fk_code_type_resource;
+				if ($status === Dolresource::STATUS_UNKNOWN && !$object->hasStatusProvider()) {
+					setEventMessages($langs->trans('ResourceStatusProviderRequired'), null, 'errors');
+					$error++;
+				} else {
+					$object->status = $status;
+				}
 
 				// Fill array 'array_options' with data from add form
 				$ret = $extrafields->setOptionalsFromPost(null, $object, '@GETPOSTISSET');
@@ -187,7 +232,7 @@ if (empty($reshook)) {
 					$error++;
 				}
 
-				$result = $object->update($user);
+				$result = !$error ? $object->update($user) : -1;
 				if ($result > 0) {
 					if ($oldref != $ref) {
 						// We renamed the ref so we must change the directory too
@@ -241,7 +286,6 @@ $title = $langs->trans($action == 'create' ? 'AddResource' : 'ResourceSingular')
 $help_url = '';
 llxHeader('', $title, $help_url, '', 0, 0, '', '', '', 'mod-resource page-card');
 
-$form = new Form($db);
 $formresource = new FormResource($db);
 
 if ($action == 'create' || $object->fetch($id, $ref) > 0) {
@@ -287,6 +331,15 @@ if ($action == 'create' || $object->fetch($id, $ref) > 0) {
 		print '<tr><td>'.$langs->trans("ResourceType").'</td>';
 		print '<td>';
 		$formresource->select_types_resource($object->fk_code_type_resource, 'fk_code_type_resource', '', 2, 0, 0, 0, 1, 'minwidth200');
+		print '</td></tr>';
+
+		// Manual availability status. Busy is calculated from reservations and capacity.
+		$statusOptions = Dolresource::getStatusArray();
+		if ($action == 'create') {
+			unset($statusOptions[Dolresource::STATUS_UNKNOWN]);
+		}
+		print '<tr><td>'.$langs->trans('Status').'</td><td>';
+		print $form->selectarray('status', $statusOptions, GETPOSTISSET('status') ? $status : $object->status, 0, 0, 0, '', 0, 0, 0, '', 'minwidth200');
 		print '</td></tr>';
 
 		// Description
@@ -391,8 +444,6 @@ if ($action == 'create' || $object->fetch($id, $ref) > 0) {
 
 		print '</form>';
 	} else {
-		$formconfirm = '';
-
 		// Confirm deleting resource line
 		if ($action == 'delete' || ($conf->use_javascript_ajax && empty($conf->dol_use_jmobile))) {
 			$formconfirm = $form->formconfirm($_SERVER["PHP_SELF"]."?id=".$object->id, $langs->trans("DeleteResource"), $langs->trans("ConfirmDeleteResource"), "confirm_delete_resource", '', 0, "action-delete");
@@ -418,6 +469,12 @@ if ($action == 'create' || $object->fetch($id, $ref) > 0) {
 		print '<td>';
 		print $object->type_label;
 		print '</td>';
+		print '</tr>';
+
+		// Manual availability status
+		print '<tr>';
+		print '<td>'.$langs->trans('Status').'</td>';
+		print '<td>'.$object->getLibStatut(4).'</td>';
 		print '</tr>';
 
 		// Description
