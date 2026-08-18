@@ -203,6 +203,26 @@ class ResourceReservationTest extends TestCase
 	}
 
 	/**
+	 * Overflow is an explicit resource allocation policy and persists with the resource.
+	 *
+	 * @return void
+	 */
+	public function testResourceOverflowPolicyCanBePersisted(): void
+	{
+		global $user;
+		$resource = new Dolresource($this->db);
+		$this->assertGreaterThan(0, $resource->fetch($this->firstResourceId));
+		$this->assertSame(0, $resource->allow_overflow);
+
+		$resource->allow_overflow = 1;
+		$this->assertGreaterThan(0, $resource->update($user));
+
+		$reloadedResource = new Dolresource($this->db);
+		$this->assertGreaterThan(0, $reloadedResource->fetch($this->firstResourceId));
+		$this->assertSame(1, $reloadedResource->allow_overflow);
+	}
+
+	/**
 	 * Unknown resources can identify an internal or external person in charge.
 	 *
 	 * @return void

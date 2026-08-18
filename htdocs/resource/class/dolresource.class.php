@@ -70,6 +70,11 @@ class Dolresource extends CommonObject
 	public $max_users;
 
 	/**
+	 * @var int<0,1> Allow capacity exceeding a resource to spill over to the next preferred resource
+	 */
+	public $allow_overflow = 0;
+
+	/**
 	 * @var string ID
 	 */
 	public $fk_code_type_resource;
@@ -180,6 +185,7 @@ class Dolresource extends CommonObject
 			$this->phone,
 			$this->email,
 			$this->max_users,
+			$this->allow_overflow,
 			$this->url,
 			$this->fk_code_type_resource,
 			$this->note_public,
@@ -204,6 +210,7 @@ class Dolresource extends CommonObject
 		$sql .= "phone,";
 		$sql .= "email,";
 		$sql .= "max_users,";
+		$sql .= "allow_overflow,";
 		$sql .= "url,";
 		$sql .= "fk_code_type_resource,";
 		$sql .= "note_public,";
@@ -289,6 +296,7 @@ class Dolresource extends CommonObject
 		$sql .= " t.phone,";
 		$sql .= " t.email,";
 		$sql .= " t.max_users,";
+		$sql .= " t.allow_overflow,";
 		$sql .= " t.url,";
 		$sql .= " t.fk_code_type_resource,";
 		$sql .= " t.fk_statut,";
@@ -323,6 +331,7 @@ class Dolresource extends CommonObject
 				$this->phone = $obj->phone;
 				$this->email = $obj->email;
 				$this->max_users = $obj->max_users;
+				$this->allow_overflow = (int) $obj->allow_overflow;
 				$this->url = $obj->url;
 				$this->fk_code_type_resource = $obj->fk_code_type_resource;
 				$this->status = (int) $obj->fk_statut;
@@ -418,6 +427,7 @@ class Dolresource extends CommonObject
 		$sql .= " phone=".(isset($this->phone) ? "'".$this->db->escape($this->phone)."'" : "null").",";
 		$sql .= " email=".(isset($this->email) ? "'".$this->db->escape($this->email)."'" : "null").",";
 		$sql .= " max_users=".(isset($this->max_users) ? (int) $this->max_users : "null").",";
+		$sql .= " allow_overflow=".(!empty($this->allow_overflow) ? 1 : 0).",";
 		$sql .= " url=".(isset($this->url) ? "'".$this->db->escape($this->url)."'" : "null").",";
 		$sql .= " fk_code_type_resource=".(isset($this->fk_code_type_resource) ? "'".$this->db->escape($this->fk_code_type_resource)."'" : "null").",";
 		$sql .= " fk_statut=".((int) $this->status).",";
@@ -647,6 +657,7 @@ class Dolresource extends CommonObject
 		$sql .= " t.phone,";
 		$sql .= " t.email,";
 		$sql .= " t.max_users,";
+		$sql .= " t.allow_overflow,";
 		$sql .= " t.url,";
 		$sql .= " t.fk_code_type_resource,";
 		$sql .= " t.tms as date_modification,";
@@ -711,7 +722,8 @@ class Dolresource extends CommonObject
 					$line->description = $obj->description;
 					$this->phone = $obj->phone;
 					$this->email = $obj->email;
-					$this->max_users = $obj->max_users;
+					$line->max_users = $obj->max_users;
+					$line->allow_overflow = (int) $obj->allow_overflow;
 					$this->url = $obj->url;
 					$line->fk_code_type_resource = $obj->fk_code_type_resource;
 					$line->date_modification = $obj->date_modification;

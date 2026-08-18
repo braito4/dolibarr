@@ -29,6 +29,7 @@ CREATE TABLE llx_resource
   town                  varchar(50)     DEFAULT NULL,
   photo_filename        varchar(255)    DEFAULT NULL,
   max_users             integer         DEFAULT NULL,
+  allow_overflow        smallint        NOT NULL DEFAULT 0,
   phone                 varchar(30)     DEFAULT NULL,
   email                 varchar(255)    DEFAULT NULL,
   url                   varchar(255)    DEFAULT NULL,

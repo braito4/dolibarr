@@ -62,6 +62,7 @@ $description			= GETPOST('description', 'restricthtml');
 $phone					= GETPOST('phone', 'alpha');
 $email					= GETPOST('email', 'alpha');
 $max_users				= GETPOSTINT('max_users');
+$allow_overflow			= GETPOSTINT('allow_overflow');
 $url					= GETPOST('url', 'alpha');
 $confirm				= GETPOST('confirm', 'aZ09');
 $fk_code_type_resource	= GETPOST('fk_code_type_resource', 'aZ09');
@@ -132,6 +133,7 @@ if (empty($reshook)) {
 				$object->phone					= $phone;
 				$object->email					= $email;
 				$object->max_users				= $max_users;
+				$object->allow_overflow			= $allow_overflow ? 1 : 0;
 				$object->url					= $url;
 				$object->fk_code_type_resource	= $fk_code_type_resource;
 				$object->status                 = $status;
@@ -217,6 +219,7 @@ if (empty($reshook)) {
 				$object->phone					= $phone;
 				$object->email					= $email;
 				$object->max_users				= $max_users;
+				$object->allow_overflow			= $allow_overflow ? 1 : 0;
 				$object->url					= $url;
 				$object->fk_code_type_resource  = $fk_code_type_resource;
 				if ($status === Dolresource::STATUS_UNKNOWN && !$object->hasStatusProvider()) {
@@ -418,6 +421,10 @@ if ($action == 'create' || $object->fetch($id, $ref) > 0) {
 		print '<input type="text" class="width75 right" name="max_users" id="max_users" value="'.(GETPOSTISSET('max_users') ? GETPOST('max_users', 'int') : ($object->max_users > 0 ? $object->max_users : '')).'"></td>';
 		print '</tr>';
 
+		print '<tr><td>'.$form->editfieldkey('AllowResourceOverflow', 'allow_overflow', '', $object, 0, 'string', '', 0, 0, 'id', $langs->trans('AllowResourceOverflowHelp')).'</td>';
+		print '<td>'.$form->selectyesno('allow_overflow', GETPOSTISSET('allow_overflow') ? $allow_overflow : $object->allow_overflow, 1).'</td>';
+		print '</tr>';
+
 		// URL
 		print '<tr><td>'.$form->editfieldkey('URL', 'url', '', $object, 0).'</td>';
 		print '<td>';
@@ -491,6 +498,11 @@ if ($action == 'create' || $object->fetch($id, $ref) > 0) {
 		print '<td>';
 		print $object->max_users > 0 ? $object->max_users : '';
 		print '</td>';
+		print '</tr>';
+
+		print '<tr>';
+		print '<td>'.$langs->trans('AllowResourceOverflow').'</td>';
+		print '<td>'.yn($object->allow_overflow).'</td>';
 		print '</tr>';
 
 		// Other attributes
