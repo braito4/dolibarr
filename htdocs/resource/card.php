@@ -255,7 +255,7 @@ if (empty($reshook)) {
 		}
 
 		if ($error) {
-			$action = 'edit';
+			$action = empty($formconfirm) ? 'edit' : '';
 		}
 	}
 
