@@ -816,13 +816,22 @@ class ResourceReservationTest extends TestCase
 		$this->assertEquals(2.0, $manager->getOccupiedCapacityFromAssignments($assignments, $this->firstResourceId, '2026-10-10 08:00:00', '2026-10-11 08:00:00'));
 	}
 
-	/** @return int */
+	/**
+	 * @param string $ref      Resource reference
+	 * @param int    $capacity Maximum capacity
+	 * @return int
+	 */
 	private function createResource($ref, $capacity)
 	{
 		return $this->insert('resource', array('entity' => 1, 'ref' => $ref, 'max_users' => $capacity, 'fk_code_type_resource' => 'RES_ROOMS', 'fk_statut' => Dolresource::STATUS_FREE));
 	}
 
-	/** @return void */
+	/**
+	 * @param int   $resourceId   Resource id
+	 * @param int   $position     Preference position
+	 * @param float $usersPerUnit Capacity per unit
+	 * @return void
+	 */
 	private function insertPreference($resourceId, $position, $usersPerUnit)
 	{
 		$this->insert('element_resources', array(
@@ -839,7 +848,12 @@ class ResourceReservationTest extends TestCase
 		));
 	}
 
-	/** @return int */
+	/**
+	 * @param float  $qty       Quantity
+	 * @param string $dateStart Start date
+	 * @param string $dateEnd   End date
+	 * @return int
+	 */
 	private function createProposalLine($qty, $dateStart, $dateEnd)
 	{
 		$proposalId = $this->insert('propal', array('ref' => 'PHPUNIT-PROPAL', 'entity' => 1, 'fk_statut' => 0));
@@ -853,7 +867,13 @@ class ResourceReservationTest extends TestCase
 		));
 	}
 
-	/** @return int */
+	/**
+	 * @param float  $qty       Quantity
+	 * @param string $dateStart Start date
+	 * @param string $dateEnd   End date
+	 * @param int    $status    Contract status
+	 * @return int
+	 */
 	private function createContractLine($qty, $dateStart, $dateEnd, $status = 1)
 	{
 		global $user;
@@ -868,7 +888,16 @@ class ResourceReservationTest extends TestCase
 		));
 	}
 
-	/** @return void */
+	/**
+	 * @param int    $resourceId  Resource id
+	 * @param string $elementType Element type
+	 * @param int    $elementId   Element id
+	 * @param float  $capacity    Capacity
+	 * @param string $status      Status
+	 * @param string $dateStart   Start date
+	 * @param string $dateEnd     End date
+	 * @return void
+	 */
 	private function insertReservation($resourceId, $elementType, $elementId, $capacity, $status, $dateStart = '2026-10-10 08:00:00', $dateEnd = '2026-10-11 08:00:00')
 	{
 		$this->insert('element_resources', array(
@@ -884,7 +913,11 @@ class ResourceReservationTest extends TestCase
 		));
 	}
 
-	/** @return int */
+	/**
+	 * @param string $action Trigger action
+	 * @param int    $lineId Line id
+	 * @return int
+	 */
 	private function runLineTrigger($action, $lineId)
 	{
 		global $user, $langs, $conf;
@@ -894,7 +927,11 @@ class ResourceReservationTest extends TestCase
 		return $this->trigger->runTrigger($action, $object, $user, $langs, $conf);
 	}
 
-	/** @return int */
+	/**
+	 * @param string $action   Trigger action
+	 * @param int    $objectId Object id
+	 * @return int
+	 */
 	private function runObjectTrigger($action, $objectId)
 	{
 		global $user, $langs, $conf;
@@ -903,7 +940,11 @@ class ResourceReservationTest extends TestCase
 		return $this->trigger->runTrigger($action, $object, $user, $langs, $conf);
 	}
 
-	/** @return object|null */
+	/**
+	 * @param string $elementType Element type
+	 * @param int    $lineId      Line id
+	 * @return object|null
+	 */
 	private function fetchReservation($elementType, $lineId)
 	{
 		$sql = 'SELECT * FROM '.MAIN_DB_PREFIX.'element_resources';
@@ -912,7 +953,11 @@ class ResourceReservationTest extends TestCase
 		return $resql ? ($this->db->fetch_object($resql) ?: null) : null;
 	}
 
-	/** @return int */
+	/**
+	 * @param string $elementType Element type
+	 * @param int    $lineId      Line id
+	 * @return int
+	 */
 	private function countReservations($elementType, $lineId)
 	{
 		$sql = 'SELECT COUNT(*) as nb FROM '.MAIN_DB_PREFIX.'element_resources';
@@ -920,7 +965,10 @@ class ResourceReservationTest extends TestCase
 		return (int) $this->db->fetch_object($this->db->query($sql))->nb;
 	}
 
-	/** @return int */
+	/**
+	 * @param int $resourceId Resource id
+	 * @return int
+	 */
 	private function fetchResourceStatus($resourceId)
 	{
 		$sql = 'SELECT fk_statut FROM '.MAIN_DB_PREFIX.'resource WHERE rowid='.((int) $resourceId);
@@ -954,4 +1002,3 @@ class ResourceReservationTest extends TestCase
 		return (int) $this->db->last_insert_id(MAIN_DB_PREFIX.$table);
 	}
 }
-

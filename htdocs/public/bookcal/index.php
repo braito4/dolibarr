@@ -404,7 +404,7 @@ if ($action == 'afteradd') {
 		print '<input type="hidden" name="durationbooking" value="'.$durationbooking.'">';
 
 		if (!empty($bookableServices)) {
-			print '<tr><td><label for="service_id">'.$langs->trans('Service').'*'.'</label><br>';
+			print '<tr><td><label for="service_id">'.$langs->trans('Service').'*</label><br>';
 			print '<select name="service_id" id="service_id" class="minwidth200" required>';
 			print '<option value="">'.$langs->trans('Select').'</option>';
 			foreach ($bookableServices as $bookableService) {

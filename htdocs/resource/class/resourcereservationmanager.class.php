@@ -45,7 +45,10 @@ class ResourceReservationManager extends ResourceRequirementManager
 			+ max(0, (int) $requirement['cleanup_duration']));
 	}
 
-	/** @param string $duration Dolibarr duration such as 30i, 2h or 1d @return int Minutes */
+	/**
+	 * @param string $duration Dolibarr duration such as 30i, 2h or 1d
+	 * @return int Minutes
+	 */
 	public function durationStringToMinutes($duration)
 	{
 		if (!preg_match('/^([0-9]+)([a-z])$/i', (string) $duration, $matches)) {
@@ -112,7 +115,12 @@ class ResourceReservationManager extends ResourceRequirementManager
 		return null;
 	}
 
-	/** @param int $start Start timestamp @param int $end End timestamp @param array<int,array<string,mixed>> $rules Rules @return bool */
+	/**
+	 * @param int                            $start Start timestamp
+	 * @param int                            $end   End timestamp
+	 * @param array<int,array<string,mixed>> $rules Opening rules
+	 * @return bool
+	 */
 	private function matchesOpeningRule($start, $end, array $rules)
 	{
 		if (empty($rules)) {
@@ -374,7 +382,10 @@ class ResourceReservationManager extends ResourceRequirementManager
 		return count($impact);
 	}
 
-	/** @return array<int,array<string,mixed>> */
+	/**
+	 * @param int $resourceId Resource id
+	 * @return array<int,array<string,mixed>>
+	 */
 	private function fetchAffectedReservations($resourceId)
 	{
 		$sql = "SELECT er.*, pd.fk_product, p.ref as document_ref, prod.ref as service_ref";
@@ -403,7 +414,11 @@ class ResourceReservationManager extends ResourceRequirementManager
 		return $result;
 	}
 
-	/** @return array<string,mixed>|null */
+	/**
+	 * @param array<string,mixed>              $reservation Reservation to replace
+	 * @param array<int,array<string,mixed>>   $planned     Planned replacements
+	 * @return array<string,mixed>|null
+	 */
 	private function findReplacement(array $reservation, array $planned)
 	{
 		$sql = 'SELECT er.resource_id, er.position, er.users_per_service_unit, r.ref, r.max_users, ty.capacity_mode';
@@ -434,7 +449,13 @@ class ResourceReservationManager extends ResourceRequirementManager
 		return null;
 	}
 
-	/** @return bool */
+	/**
+	 * @param object                          $candidate   Candidate resource
+	 * @param float                           $required    Required capacity
+	 * @param array<string,mixed>              $reservation Reservation data
+	 * @param array<int,array<string,mixed>>   $planned     Planned replacements
+	 * @return bool
+	 */
 	private function candidateHasCapacity($candidate, $required, array $reservation, array $planned)
 	{
 		$maximumCapacity = ($candidate->capacity_mode === 'users') ? (float) $candidate->max_users : 1.0;
@@ -459,7 +480,11 @@ class ResourceReservationManager extends ResourceRequirementManager
 		return ($occupied + $required) <= $maximumCapacity;
 	}
 
-	/** @return bool */
+	/**
+	 * @param array<string,mixed> $left  First interval
+	 * @param array<string,mixed> $right Second interval
+	 * @return bool
+	 */
 	private function overlaps(array $left, array $right)
 	{
 		return (empty($left['date_end']) || empty($right['date_start']) || $right['date_start'] <= $left['date_end'])

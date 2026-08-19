@@ -399,7 +399,17 @@ class InterfaceResourceReservations extends DolibarrTriggers
 		return 1;
 	}
 
-	/** Insert one normalized assignment row. */
+	/**
+	 * Insert one normalized assignment row.
+	 *
+	 * @param string   $elementType    Source element type
+	 * @param object   $line           Source line
+	 * @param object   $selected       Selected requirement
+	 * @param float    $serviceQuantity Service quantity
+	 * @param bool     $isConfirmed    Whether the assignment is confirmed
+	 * @param User     $user           Acting user
+	 * @return bool
+	 */
 	private function insertAssignment($elementType, $line, $selected, $serviceQuantity, $isConfirmed, User $user)
 	{
 		$sql = 'INSERT INTO '.MAIN_DB_PREFIX.'element_resources (';
