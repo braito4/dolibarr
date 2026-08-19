@@ -238,6 +238,8 @@ class Dolresource extends CommonObject
 		$this->supports_cooldown = $model ? (int) $model->supports_cooldown : 0;
 		if ($this->capacity_mode !== 'users') {
 			$this->max_users = null;
+		}
+		if ($this->capacity_mode !== 'users' && $this->capacity_mode !== 'volume') {
 			$this->allow_overflow = 0;
 		}
 		if ($this->capacity_mode !== 'custom' && $this->capacity_mode !== 'volume') {
