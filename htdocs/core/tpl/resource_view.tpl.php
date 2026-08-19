@@ -44,6 +44,9 @@ if (empty($conf) || !is_object($conf)) {
 
 $form = new Form($db);
 $isProductResourceList = ($element == 'product' || $element == 'service');
+$resourceHelpLabel = function ($labelKey) use ($form, $langs) {
+	return $form->textwithpicto($langs->trans($labelKey), $langs->trans($labelKey.'Help'));
+};
 
 
 print '<div class="tagtable centpercent noborder allwidth">';
@@ -97,21 +100,21 @@ if ((array) $linked_resources && count($linked_resources) > 0) {
 				$endInputOptions = $startInputOptions + array('calculated' => $langs->trans('TimeInputCalculated'));
 				$precisionOptions = array('day' => $langs->trans('TimePrecisionDay'), 'hour' => $langs->trans('TimePrecisionHour'), 'minute' => $langs->trans('TimePrecisionMinute'), 'second' => $langs->trans('TimePrecisionSecond'));
 				print '<div class="tagtd">';
-				print $form->selectarray('resource_role', $roleOptions, $linked_resource['resource_role']).' ';
-				print $form->selectarray('scheduling_mode', $schedulingOptions, $linked_resource['scheduling_mode']).'<br>';
-				print $langs->trans('StartInputMode').' '.$form->selectarray('start_input_mode', $startInputOptions, $linked_resource['start_input_mode']).' ';
-				print $langs->trans('EndInputMode').' '.$form->selectarray('end_input_mode', $endInputOptions, $linked_resource['end_input_mode']).' ';
-				print $langs->trans('TimePrecision').' '.$form->selectarray('time_precision', $precisionOptions, $linked_resource['time_precision']).'<br>';
-				print $langs->trans('UsersPerServiceUnit').' <input type="text" class="width50 right" name="users_per_service_unit" value="'.price($linked_resource['users_per_service_unit']).'" required> ';
-				print $langs->trans('ResourceQuantityRequired').' <input type="text" class="width50 right" name="quantity_required" value="'.price($linked_resource['quantity_required']).'"> ';
-				print $langs->trans('DurationBaseMinutes').' <input type="number" min="0" class="width50" name="duration_base" value="'.$linked_resource['duration_base'].'"> ';
-				print $langs->trans('DurationPerUnitMinutes').' <input type="number" min="0" class="width50" name="duration_per_unit" value="'.$linked_resource['duration_per_unit'].'"><br>';
-				print $langs->trans('SetupDurationMinutes').' <input type="number" min="0" class="width50" name="setup_duration" value="'.$linked_resource['setup_duration'].'"> ';
-				print $langs->trans('CleanupDurationMinutes').' <input type="number" min="0" class="width50" name="cleanup_duration" value="'.$linked_resource['cleanup_duration'].'"> ';
-				print $langs->trans('RequirementGroup').' <input type="text" class="width75" name="requirement_group" value="'.dol_escape_htmltag($linked_resource['requirement_group']).'"> ';
-				print '<label>'.$langs->trans('Mandatory').' <input type="checkbox" name="mandatory" value="1"'.($linked_resource['mandatory'] ? ' checked' : '').'></label> ';
-				print '<label>'.$langs->trans('SimultaneousRequirement').' <input type="checkbox" name="simultaneous" value="1"'.($linked_resource['simultaneous'] ? ' checked' : '').'></label> ';
-				print '<label>'.$langs->trans('AllowSplitRequirement').' <input type="checkbox" name="allow_split" value="1"'.($linked_resource['allow_split'] ? ' checked' : '').'></label>';
+				print $resourceHelpLabel('ResourceRole').' '.$form->selectarray('resource_role', $roleOptions, $linked_resource['resource_role']).' ';
+				print $resourceHelpLabel('SchedulingMode').' '.$form->selectarray('scheduling_mode', $schedulingOptions, $linked_resource['scheduling_mode']).'<br>';
+				print $resourceHelpLabel('StartInputMode').' '.$form->selectarray('start_input_mode', $startInputOptions, $linked_resource['start_input_mode']).' ';
+				print $resourceHelpLabel('EndInputMode').' '.$form->selectarray('end_input_mode', $endInputOptions, $linked_resource['end_input_mode']).' ';
+				print $resourceHelpLabel('TimePrecision').' '.$form->selectarray('time_precision', $precisionOptions, $linked_resource['time_precision']).'<br>';
+				print $resourceHelpLabel('UsersPerServiceUnit').' <input type="text" class="width50 right" name="users_per_service_unit" value="'.price($linked_resource['users_per_service_unit']).'" required> ';
+				print $resourceHelpLabel('ResourceQuantityRequired').' <input type="text" class="width50 right" name="quantity_required" value="'.price($linked_resource['quantity_required']).'"> ';
+				print $resourceHelpLabel('DurationBaseMinutes').' <input type="number" min="0" class="width50" name="duration_base" value="'.$linked_resource['duration_base'].'"> ';
+				print $resourceHelpLabel('DurationPerUnitMinutes').' <input type="number" min="0" class="width50" name="duration_per_unit" value="'.$linked_resource['duration_per_unit'].'"><br>';
+				print $resourceHelpLabel('SetupDurationMinutes').' <input type="number" min="0" class="width50" name="setup_duration" value="'.$linked_resource['setup_duration'].'"> ';
+				print $resourceHelpLabel('CleanupDurationMinutes').' <input type="number" min="0" class="width50" name="cleanup_duration" value="'.$linked_resource['cleanup_duration'].'"> ';
+				print $resourceHelpLabel('RequirementGroup').' <input type="text" class="width75" name="requirement_group" value="'.dol_escape_htmltag($linked_resource['requirement_group']).'"> ';
+				print '<label>'.$resourceHelpLabel('Mandatory').' <input type="checkbox" name="mandatory" value="1"'.($linked_resource['mandatory'] ? ' checked' : '').'></label> ';
+				print '<label>'.$resourceHelpLabel('SimultaneousRequirement').' <input type="checkbox" name="simultaneous" value="1"'.($linked_resource['simultaneous'] ? ' checked' : '').'></label> ';
+				print '<label>'.$resourceHelpLabel('AllowSplitRequirement').' <input type="checkbox" name="allow_split" value="1"'.($linked_resource['allow_split'] ? ' checked' : '').'></label>';
 				print '</div>';
 			} else {
 				print '<div class="tagtd center">'.$form->selectyesno('busy', $linked_resource['busy'] ? 1 : 0, 1).'</div>';

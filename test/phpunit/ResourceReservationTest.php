@@ -361,6 +361,94 @@ class ResourceReservationTest extends TestCase
 	}
 
 	/**
+	 * Requirement duration includes setup, base, per-unit and cleanup time.
+	 *
+	 * @return void
+	 */
+	public function testRequirementDurationCalculation(): void
+	{
+		$manager = new ResourceReservationManager($this->db);
+		$duration = $manager->calculateDuration(array(
+			'setup_duration' => 10,
+			'duration_base' => 20,
+			'duration_per_unit' => 15,
+			'cleanup_duration' => 5,
+		), 3);
+		$this->assertSame(80, $duration);
+	}
+
+	/**
+	 * The strictest associated requirements define the service-line time UI.
+	 *
+	 * @return void
+	 */
+	public function testTemporalPolicyCombinesResourceRequirements(): void
+	{
+		$sql = 'UPDATE '.MAIN_DB_PREFIX.'element_resources SET start_input_mode = \'date\',';
+		$sql .= " end_input_mode = 'calculated', time_precision = 'hour'";
+		$sql .= ' WHERE element_id = '.((int) $this->serviceId).' AND position = 1';
+		$this->assertTrue((bool) $this->db->query($sql));
+		$sql = 'UPDATE '.MAIN_DB_PREFIX.'element_resources SET start_input_mode = \'datetime\',';
+		$sql .= " end_input_mode = 'datetime', time_precision = 'second'";
+		$sql .= ' WHERE element_id = '.((int) $this->serviceId).' AND position = 2';
+		$this->assertTrue((bool) $this->db->query($sql));
+
+		$policy = (new ResourceReservationManager($this->db))->getTemporalPolicy('product', $this->serviceId);
+		$this->assertTrue($policy['has_requirements']);
+		$this->assertSame('datetime', $policy['start_input_mode']);
+		$this->assertSame('datetime', $policy['end_input_mode']);
+		$this->assertSame('second', $policy['time_precision']);
+		$this->assertTrue($policy['show_start']);
+		$this->assertTrue($policy['show_end']);
+		$this->assertFalse($policy['calculate_end']);
+	}
+
+	/**
+	 * Resource type metadata and machine cooldown persist on the resource.
+	 *
+	 * @return void
+	 */
+	public function testMachineResourceModelCanBePersisted(): void
+	{
+		global $user;
+		$resource = new Dolresource($this->db);
+		$this->assertGreaterThan(0, $resource->fetch($this->firstResourceId));
+		$resource->fk_code_type_resource = 'RES_MACHINES';
+		$resource->max_users = null;
+		$resource->metric_value = 1200.5;
+		$resource->cooldown_minutes = 30;
+		$this->assertGreaterThan(0, $resource->update($user));
+
+		$reloaded = new Dolresource($this->db);
+		$this->assertGreaterThan(0, $reloaded->fetch($this->firstResourceId));
+		$this->assertSame('none', $reloaded->capacity_mode);
+		$this->assertSame(1, $reloaded->supports_cooldown);
+		$this->assertEquals(1200.5, $reloaded->metric_value);
+		$this->assertSame(30, $reloaded->cooldown_minutes);
+	}
+
+	/**
+	 * Cooldown extends resource occupation without changing the service line dates.
+	 *
+	 * @return void
+	 */
+	public function testMachineCooldownExtendsReservationBlock(): void
+	{
+		$sql = 'UPDATE '.MAIN_DB_PREFIX."resource SET fk_code_type_resource = 'RES_MACHINES', max_users = NULL, cooldown_minutes = 30";
+		$sql .= ' WHERE rowid = '.((int) $this->firstResourceId);
+		$this->assertTrue((bool) $this->db->query($sql));
+		$sql = 'UPDATE '.MAIN_DB_PREFIX.'element_resources SET users_per_service_unit = 1';
+		$sql .= ' WHERE element_id = '.((int) $this->serviceId).' AND position = 1';
+		$this->assertTrue((bool) $this->db->query($sql));
+		$lineId = $this->createContractLine(1.0, '2026-10-10 08:00:00', '2026-10-10 09:00:00');
+
+		$this->assertSame(1, $this->runLineTrigger('LINECONTRACT_INSERT', $lineId));
+		$reservation = $this->fetchReservation('contratdet', $lineId);
+		$this->assertSame('2026-10-10 08:00:00', $reservation->date_start);
+		$this->assertSame('2026-10-10 09:30:00', $reservation->date_end);
+	}
+
+	/**
 	 * Both absolute and weekly slot definitions can be persisted.
 	 *
 	 * @return void
@@ -397,7 +485,7 @@ class ResourceReservationTest extends TestCase
 	/** @return int */
 	private function createResource($ref, $capacity)
 	{
-		return $this->insert('resource', array('entity' => 1, 'ref' => $ref, 'max_users' => $capacity, 'fk_statut' => Dolresource::STATUS_FREE));
+		return $this->insert('resource', array('entity' => 1, 'ref' => $ref, 'max_users' => $capacity, 'fk_code_type_resource' => 'RES_ROOMS', 'fk_statut' => Dolresource::STATUS_FREE));
 	}
 
 	/** @return void */
@@ -409,8 +497,10 @@ class ResourceReservationTest extends TestCase
 			'resource_id' => $resourceId,
 			'resource_type' => 'dolresource',
 			'busy' => 0,
-			'mandatory' => 0,
+			'mandatory' => 1,
 			'position' => $position,
+			'relation_kind' => 'requirement',
+			'requirement_group' => 'preferred_room',
 			'users_per_service_unit' => $usersPerUnit,
 		));
 	}
@@ -452,6 +542,7 @@ class ResourceReservationTest extends TestCase
 			'element_type' => $elementType,
 			'resource_id' => $resourceId,
 			'resource_type' => 'dolresource',
+			'relation_kind' => 'assignment',
 			'capacity_used' => $capacity,
 			'date_start' => $dateStart,
 			'date_end' => $dateEnd,
