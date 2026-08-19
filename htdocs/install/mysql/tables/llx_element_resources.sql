@@ -42,6 +42,10 @@ CREATE TABLE llx_element_resources
 	time_precision   varchar(16) NOT NULL DEFAULT 'minute',
 	simultaneous	  smallint NOT NULL DEFAULT 1,
 	allow_split		  smallint NOT NULL DEFAULT 0,
+	context_scope	  varchar(16) NOT NULL DEFAULT 'service_line',
+	demand_source	  varchar(16) NOT NULL DEFAULT 'service_quantity',
+	capacity_metrics varchar(32) NOT NULL DEFAULT 'units',
+	selection_policy varchar(24) NOT NULL DEFAULT 'preference_order',
   duree				real,               -- total duration of using ressource
   fk_user_create  integer,
   tms             timestamp DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP

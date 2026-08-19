@@ -9,6 +9,7 @@ $documentRoot = is_file(dirname(__FILE__).'/../../htdocs/master.inc.php')
 	: dirname(__FILE__).'/../..';
 require_once $documentRoot.'/master.inc.php';
 require_once $documentRoot.'/resource/class/resourcerequirementmanager.class.php';
+require_once $documentRoot.'/resource/class/dolresource.class.php';
 
 /**
  * Tests for product and service resource requirements.
@@ -59,5 +60,26 @@ class ResourceServiceRelationTest extends TestCase
 		$this->assertTrue($policy['show_start']);
 		$this->assertTrue($policy['show_end']);
 		$this->assertTrue($policy['automatic']);
+	}
+
+	/**
+	 * Volume awareness metadata is returned with service requirements.
+	 *
+	 * @return void
+	 */
+	public function testVolumeAwarenessMetadataIsLoaded(): void
+	{
+		$sql = 'INSERT INTO '.$this->db->prefix().'element_resources';
+		$sql .= ' (element_id, element_type, resource_id, resource_type, relation_kind, context_scope, demand_source, capacity_metrics, selection_policy)';
+		$sql .= " VALUES (99102, 'service', 99203, 'dolresource', 'requirement', 'same_proposal', 'product_lines', 'volume', 'smallest_sufficient')";
+		$this->assertTrue((bool) $this->db->query($sql));
+
+		$requirements = (new Dolresource($this->db))->getElementResources('service', 99102, 'dolresource');
+
+		$this->assertCount(1, $requirements);
+		$this->assertSame('same_proposal', $requirements[0]['context_scope']);
+		$this->assertSame('product_lines', $requirements[0]['demand_source']);
+		$this->assertSame('volume', $requirements[0]['capacity_metrics']);
+		$this->assertSame('smallest_sufficient', $requirements[0]['selection_policy']);
 	}
 }

@@ -53,6 +53,13 @@ $formresources = new FormResource($db);
 $resourceHelpLabel = function (string $labelKey) use ($form, $langs): string {
 	return $form->textwithpicto($langs->trans($labelKey), $langs->trans($labelKey.'Help'));
 };
+$resourceCapacityModes = array();
+$sqlResourceCapacityModes = 'SELECT r.rowid, ty.capacity_mode FROM '.$db->prefix().'resource r';
+$sqlResourceCapacityModes .= ' LEFT JOIN '.$db->prefix().'c_type_resource ty ON ty.code = r.fk_code_type_resource';
+$resqlResourceCapacityModes = $db->query($sqlResourceCapacityModes);
+while ($resqlResourceCapacityModes && ($resourceCapacityMode = $db->fetch_object($resqlResourceCapacityModes))) {
+	$resourceCapacityModes[(int) $resourceCapacityMode->rowid] = $resourceCapacityMode->capacity_mode ?: 'none';
+}
 
 $out = '';
 
@@ -92,6 +99,10 @@ if ($element != 'product' && $element != 'service') {
 	$startInputOptions = array('none' => $langs->trans('TimeInputNone'), 'date' => $langs->trans('TimeInputDate'), 'datetime' => $langs->trans('TimeInputDatetime'));
 	$endInputOptions = $startInputOptions + array('calculated' => $langs->trans('TimeInputCalculated'));
 	$precisionOptions = array('day' => $langs->trans('TimePrecisionDay'), 'hour' => $langs->trans('TimePrecisionHour'), 'minute' => $langs->trans('TimePrecisionMinute'), 'second' => $langs->trans('TimePrecisionSecond'));
+	$contextScopeOptions = array('service_line' => $langs->trans('CapacityContextServiceLine'), 'same_proposal' => $langs->trans('CapacityContextSameProposal'));
+	$demandSourceOptions = array('service_quantity' => $langs->trans('DemandSourceServiceQuantity'), 'product_lines' => $langs->trans('DemandSourceProductLines'));
+	$capacityMetricOptions = array('units' => $langs->trans('CapacityMetricUnits'), 'volume' => $langs->trans('CapacityMetricVolume'));
+	$selectionPolicyOptions = array('preference_order' => $langs->trans('SelectionPolicyPreferenceOrder'), 'smallest_sufficient' => $langs->trans('SelectionPolicySmallestSufficient'));
 	$out .= '<div class="divsearchfield paddingtop paddingbottom valignmiddle inline-block"><label for="resource_role">'.$resourceHelpLabel('ResourceRole').'</label> '.$form->selectarray('resource_role', $roleOptions, GETPOST('resource_role', 'alpha') ?: 'capacity').'</div>';
 	$out .= '<div class="divsearchfield paddingtop paddingbottom valignmiddle inline-block"><label for="scheduling_mode">'.$resourceHelpLabel('SchedulingMode').'</label> '.$form->selectarray('scheduling_mode', $schedulingOptions, GETPOST('scheduling_mode', 'alpha') ?: 'same_as_parent').'</div>';
 	$out .= '<div class="divsearchfield paddingtop paddingbottom valignmiddle inline-block"><label for="start_input_mode">'.$resourceHelpLabel('StartInputMode').'</label> '.$form->selectarray('start_input_mode', $startInputOptions, GETPOST('start_input_mode', 'alpha') ?: 'none').'</div>';
@@ -106,6 +117,10 @@ if ($element != 'product' && $element != 'service') {
 	$out .= '<div class="divsearchfield paddingtop paddingbottom valignmiddle inline-block"><label>'.$resourceHelpLabel('Mandatory').'</label> <input type="checkbox" name="mandatory" value="1" checked></div>';
 	$out .= '<div class="divsearchfield paddingtop paddingbottom valignmiddle inline-block"><label>'.$resourceHelpLabel('SimultaneousRequirement').'</label> <input type="checkbox" name="simultaneous" value="1" checked></div>';
 	$out .= '<div class="divsearchfield paddingtop paddingbottom valignmiddle inline-block"><label>'.$resourceHelpLabel('AllowSplitRequirement').'</label> <input type="checkbox" name="allow_split" value="1"></div>';
+	$out .= '<div class="resource-volume-awareness divsearchfield paddingtop paddingbottom valignmiddle inline-block"><label for="context_scope">'.$resourceHelpLabel('CapacityContextScope').'</label> '.$form->selectarray('context_scope', $contextScopeOptions, GETPOST('context_scope', 'alpha') ?: 'same_proposal').'</div>';
+	$out .= '<div class="resource-volume-awareness divsearchfield paddingtop paddingbottom valignmiddle inline-block"><label for="demand_source">'.$resourceHelpLabel('CapacityDemandSource').'</label> '.$form->selectarray('demand_source', $demandSourceOptions, GETPOST('demand_source', 'alpha') ?: 'product_lines').'</div>';
+	$out .= '<div class="resource-volume-awareness divsearchfield paddingtop paddingbottom valignmiddle inline-block"><label for="capacity_metrics">'.$resourceHelpLabel('CapacityMetrics').'</label> '.$form->selectarray('capacity_metrics', $capacityMetricOptions, GETPOST('capacity_metrics', 'alpha') ?: 'volume').'</div>';
+	$out .= '<div class="resource-volume-awareness divsearchfield paddingtop paddingbottom valignmiddle inline-block"><label for="selection_policy">'.$resourceHelpLabel('ResourceSelectionPolicy').'</label> '.$form->selectarray('selection_policy', $selectionPolicyOptions, GETPOST('selection_policy', 'alpha') ?: 'smallest_sufficient').'</div>';
 }
 
 $out .= '<div class="divsearchfield paddingtop paddingbottom valignmiddle inline-block right">';
@@ -115,6 +130,10 @@ $out .= '</div>';
 $out .= '</div>';
 
 $out .= '</form>';
+
+if ($element == 'product' || $element == 'service') {
+	$out .= '<script>jQuery(function(){var capacityModes='.json_encode($resourceCapacityModes).'; function toggleVolumeAwareness(){var visible=capacityModes[jQuery("#fk_resource").val()] === "volume"; jQuery(".resource-volume-awareness").toggle(visible).find(":input").prop("disabled", !visible);} jQuery("#fk_resource").on("change", toggleVolumeAwareness); toggleVolumeAwareness();});</script>';
+}
 
 $out .= '</div>';
 $out .= '<br>';
