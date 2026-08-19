@@ -183,6 +183,31 @@ class ResourceReservationTest extends TestCase
 	}
 
 	/**
+	 * Homogeneous resource inventory is independent from user occupancy.
+	 *
+	 * @return void
+	 */
+	public function testHomogeneousResourceInventoryDoesNotShareAnOccupiedUnit(): void
+	{
+		$sql = 'UPDATE '.MAIN_DB_PREFIX.'resource SET max_users = 2, available_units = 2';
+		$sql .= ' WHERE rowid = '.((int) $this->firstResourceId);
+		$this->assertTrue((bool) $this->db->query($sql));
+		$sql = 'UPDATE '.MAIN_DB_PREFIX.'element_resources SET users_per_service_unit = 1';
+		$sql .= ' WHERE element_id = '.((int) $this->serviceId);
+		$this->assertTrue((bool) $this->db->query($sql));
+		$this->insertReservation($this->firstResourceId, 'contratdet', 999020, 1.0, 'confirmed');
+		$secondRoomLineId = $this->createContractLine(1.0, '2026-10-10 08:00:00', '2026-10-11 08:00:00');
+		$this->assertSame(1, $this->runLineTrigger('LINECONTRACT_INSERT', $secondRoomLineId));
+		$secondRoomReservation = $this->fetchReservation('contratdet', $secondRoomLineId);
+		$this->assertSame($this->firstResourceId, (int) $secondRoomReservation->resource_id);
+		$this->assertSame(1, (int) $secondRoomReservation->resource_units_used);
+
+		$fallbackLineId = $this->createContractLine(1.0, '2026-10-10 08:00:00', '2026-10-11 08:00:00');
+		$this->assertSame(1, $this->runLineTrigger('LINECONTRACT_INSERT', $fallbackLineId));
+		$this->assertSame($this->secondResourceId, (int) $this->fetchReservation('contratdet', $fallbackLineId)->resource_id);
+	}
+
+	/**
 	 * Multiple whole service units use different alternatives when one resource
 	 * cannot hold the complete line quantity.
 	 *
@@ -461,6 +486,76 @@ class ResourceReservationTest extends TestCase
 	}
 
 	/**
+	 * An out-of-service resource creates an agenda alert for an affected reservation.
+	 *
+	 * @return void
+	 */
+	public function testOutOfServiceCreatesAlertForAffectedReservation(): void
+	{
+		global $user;
+		$sql = 'UPDATE '.MAIN_DB_PREFIX.'resource SET fk_statut='.Dolresource::STATUS_OUT_OF_SERVICE;
+		$sql .= ' WHERE rowid='.((int) $this->secondResourceId);
+		$this->assertTrue((bool) $this->db->query($sql));
+		$lineId = $this->createContractLine(1.0, '2027-02-10 15:00:00', '2027-02-11 11:00:00');
+		$this->assertSame(1, $this->runLineTrigger('LINECONTRACT_INSERT', $lineId));
+		$manager = new ResourceReservationManager($this->db);
+		$impact = $manager->previewOutOfService($this->firstResourceId);
+
+		$this->assertCount(1, $impact);
+		$this->assertSame(1, $manager->applyOutOfService($this->firstResourceId, $impact, $user));
+		$alert = $this->fetchLastOutOfServiceAlert();
+		$this->assertNotNull($alert);
+		$this->assertSame('AC_RESOURCE_OUT_OF_SERVICE', $alert->code);
+		$this->assertStringContainsString('PHPUNIT_RESOURCE_FIRST', $alert->label);
+		$this->assertStringContainsString('PHPUNIT_RESOURCE_SERVICE', $alert->note_private);
+		$this->assertSame(0, (int) $alert->fk_soc);
+	}
+
+	/**
+	 * A confirmed third-party resource becoming unavailable alerts the supplier
+	 * and invalidates the linked availability confirmation.
+	 *
+	 * @return void
+	 */
+	public function testThirdPartyOutOfServiceAlertsSupplierAndInvalidatesConfirmation(): void
+	{
+		global $user;
+		$this->insert('product_fournisseur_price', array(
+			'entity' => 1,
+			'fk_product' => $this->serviceId,
+			'fk_soc' => $this->thirdPartyId,
+			'ref_fourn' => 'PHPUNIT-EXTERNAL-ROOM',
+			'quantity' => 1,
+			'tva_tx' => 0,
+		));
+		$sql = 'UPDATE '.MAIN_DB_PREFIX.'resource SET fk_statut='.Dolresource::STATUS_OUT_OF_SERVICE;
+		$sql .= ' WHERE rowid='.((int) $this->secondResourceId);
+		$this->assertTrue((bool) $this->db->query($sql));
+		$context = $this->createValidatedUnknownProposal(1.0, '2027-02-12 15:00:00', '2027-02-13 11:00:00');
+		$request = $this->fetchSupplyRequestForLine($context['line_id']);
+		$supplyManager = new ResourceSupplyRequestManager($this->db);
+		$this->assertSame(1, $supplyManager->confirm((int) $request->rowid, array(
+			'quantity_confirmed' => 1,
+			'date_start' => '2027-02-12 15:00:00',
+			'date_end' => '2027-02-13 11:00:00',
+		), $user));
+
+		$manager = new ResourceReservationManager($this->db);
+		$impact = $manager->previewOutOfService($this->firstResourceId);
+		$this->assertCount(1, $impact);
+		$this->assertSame($this->thirdPartyId, (int) $impact[0]['supplier_id']);
+		$this->assertSame(1, $manager->applyOutOfService($this->firstResourceId, $impact, $user));
+		$this->assertSame(ResourceSupplyRequestManager::STATUS_UNAVAILABLE, $this->fetchSupplyRequestForLine($context['line_id'])->request_status);
+		$this->assertSame(ResourceReservationManager::STATUS_UNAVAILABLE, $this->fetchReservation('propaldet', $context['line_id'])->reservation_status);
+
+		$alert = $this->fetchLastOutOfServiceAlert();
+		$this->assertNotNull($alert);
+		$this->assertSame($this->thirdPartyId, (int) $alert->fk_soc);
+		$this->assertStringContainsString('PHPUnit Resource Reservation', $alert->note_private);
+		$this->assertStringContainsString('PHPUNIT_RESOURCE_SERVICE', $alert->note_private);
+	}
+
+	/**
 	 * Resource preferences are returned in configured position order.
 	 *
 	 * @return void
@@ -636,6 +731,302 @@ class ResourceReservationTest extends TestCase
 		$this->assertSame(ResourceSupplyRequestManager::STATUS_CONFIRMED, $request->request_status);
 		$this->assertSame('unilateral', $request->demand_origin);
 		$this->assertGreaterThan(0, (int) $request->fk_availability_slot);
+	}
+
+	/**
+	 * Validating a proposal with an unknown resource creates a confirmation request.
+	 * Refusing it later releases a confirmation that had already been accepted.
+	 *
+	 * @return void
+	 */
+	public function testUnknownProposalAvailabilityIsRequestedAndReleased(): void
+	{
+		global $user, $langs, $conf;
+		$sql = 'UPDATE '.MAIN_DB_PREFIX.'resource SET fk_statut='.Dolresource::STATUS_UNKNOWN;
+		$sql .= ' WHERE rowid='.((int) $this->firstResourceId);
+		$this->assertTrue((bool) $this->db->query($sql));
+		$lineId = $this->createProposalLine(1.0, '2026-12-10 08:00:00', '2026-12-11 08:00:00');
+		$sql = 'SELECT fk_propal FROM '.MAIN_DB_PREFIX.'propaldet WHERE rowid='.((int) $lineId);
+		$proposalId = (int) $this->db->fetch_object($this->db->query($sql))->fk_propal;
+		$proposal = new stdClass();
+		$proposal->id = $proposalId;
+
+		$this->assertSame(1, $this->trigger->runTrigger('PROPAL_VALIDATE', $proposal, $user, $langs, $conf));
+		$assignment = $this->fetchReservation('propaldet', $lineId);
+		$this->assertSame(ResourceReservationManager::STATUS_AWAITING_SUPPLY, $assignment->reservation_status);
+		$sql = 'SELECT rowid, request_status, quantity_requested FROM '.MAIN_DB_PREFIX.'resource_supply_request';
+		$sql .= ' WHERE fk_element_resource='.((int) $assignment->rowid);
+		$request = $this->db->fetch_object($this->db->query($sql));
+		$this->assertSame(ResourceSupplyRequestManager::STATUS_UNKNOWN, $request->request_status);
+		$this->assertEquals(1.0, $request->quantity_requested);
+
+		$manager = new ResourceSupplyRequestManager($this->db);
+		$this->assertSame(1, $manager->confirm((int) $request->rowid, array(
+			'quantity_confirmed' => 1,
+			'date_start' => '2026-12-10 08:00:00',
+			'date_end' => '2026-12-11 08:00:00',
+		), $user));
+		$this->assertSame(1, $this->trigger->runTrigger('PROPAL_CLOSE_REFUSED', $proposal, $user, $langs, $conf));
+		$sql = 'SELECT request_status FROM '.MAIN_DB_PREFIX.'resource_supply_request WHERE rowid='.((int) $request->rowid);
+		$this->assertSame(ResourceSupplyRequestManager::STATUS_RELEASED, $this->db->fetch_object($this->db->query($sql))->request_status);
+		$this->assertSame(ResourceReservationManager::STATUS_CANCELED, $this->fetchReservation('propaldet', $lineId)->reservation_status);
+	}
+
+	/**
+	 * An unknown-resource request keeps the supplier, service, units and exact dates.
+	 *
+	 * @return void
+	 */
+	public function testUnknownProposalRequestContainsSupplierServiceUnitsAndDates(): void
+	{
+		$sql = 'UPDATE '.MAIN_DB_PREFIX.'resource SET available_units=2 WHERE rowid='.((int) $this->firstResourceId);
+		$this->assertTrue((bool) $this->db->query($sql));
+		$this->insert('product_fournisseur_price', array(
+			'entity' => 1,
+			'fk_product' => $this->serviceId,
+			'fk_soc' => $this->thirdPartyId,
+			'ref_fourn' => 'PHPUNIT-SUPPLIER-ROOM',
+			'quantity' => 1,
+			'tva_tx' => 0,
+		));
+		$context = $this->createValidatedUnknownProposal(2.0, '2026-12-12 15:00:00', '2026-12-14 11:00:00');
+		$request = $this->fetchSupplyRequestForLine($context['line_id']);
+
+		$this->assertNotNull($request);
+		$this->assertSame($this->firstResourceId, (int) $request->fk_resource);
+		$this->assertSame($this->thirdPartyId, (int) $request->fk_soc_supplier);
+		$this->assertSame($this->serviceId, (int) $request->fk_product_supplier);
+		$this->assertSame('supplier', $request->request_type);
+		$this->assertEquals(2.0, $request->quantity_requested);
+		$this->assertSame('2026-12-12 15:00:00', $request->date_start);
+		$this->assertSame('2026-12-14 11:00:00', $request->date_end);
+	}
+
+	/**
+	 * Supplier confirmation holds the resource and customer acceptance consumes it.
+	 *
+	 * @return void
+	 */
+	public function testConfirmedUnknownAvailabilityBecomesConsumedWhenProposalIsAccepted(): void
+	{
+		global $user;
+		$context = $this->createValidatedUnknownProposal(1.0, '2026-12-15 15:00:00', '2026-12-16 11:00:00');
+		$request = $this->fetchSupplyRequestForLine($context['line_id']);
+		$manager = new ResourceSupplyRequestManager($this->db);
+
+		$this->assertSame(1, $manager->confirm((int) $request->rowid, array(
+			'quantity_confirmed' => 1,
+			'date_start' => '2026-12-15 15:00:00',
+			'date_end' => '2026-12-16 11:00:00',
+		), $user));
+		$this->assertSame(ResourceReservationManager::STATUS_CONFIRMED, $this->fetchReservation('propaldet', $context['line_id'])->reservation_status);
+		$this->assertSame(Dolresource::STATUS_UNKNOWN, $this->fetchResourceStatus($this->firstResourceId));
+
+		$this->assertSame(1, $this->runObjectTrigger('PROPAL_CLOSE_SIGNED', $context['proposal_id']));
+		$this->assertSame(ResourceSupplyRequestManager::STATUS_CONSUMED, $this->fetchSupplyRequestForLine($context['line_id'])->request_status);
+	}
+
+	/**
+	 * Canceling a proposal before confirmation cancels its request and refuses late replies.
+	 *
+	 * @return void
+	 */
+	public function testCanceledUnknownRequestRejectsLateSupplierConfirmation(): void
+	{
+		global $user;
+		$context = $this->createValidatedUnknownProposal(1.0, '2026-12-17 15:00:00', '2026-12-18 11:00:00');
+		$request = $this->fetchSupplyRequestForLine($context['line_id']);
+
+		$this->assertSame(1, $this->runObjectTrigger('PROPAL_CLOSE_REFUSED', $context['proposal_id']));
+		$this->assertSame(ResourceSupplyRequestManager::STATUS_CANCELED, $this->fetchSupplyRequestForLine($context['line_id'])->request_status);
+		$this->assertSame(ResourceReservationManager::STATUS_CANCELED, $this->fetchReservation('propaldet', $context['line_id'])->reservation_status);
+
+		$manager = new ResourceSupplyRequestManager($this->db);
+		$this->assertSame(-2, $manager->confirm((int) $request->rowid, array(
+			'quantity_confirmed' => 1,
+			'date_start' => '2026-12-17 15:00:00',
+			'date_end' => '2026-12-18 11:00:00',
+		), $user));
+	}
+
+	/**
+	 * A supplier response must match the requested units and date interval exactly.
+	 *
+	 * @return void
+	 */
+	public function testUnknownAvailabilityRejectsMismatchedSupplierResponse(): void
+	{
+		global $user;
+		$context = $this->createValidatedUnknownProposal(1.0, '2026-12-19 15:00:00', '2026-12-20 11:00:00');
+		$request = $this->fetchSupplyRequestForLine($context['line_id']);
+		$manager = new ResourceSupplyRequestManager($this->db);
+
+		$this->assertSame(-2, $manager->confirm((int) $request->rowid, array(
+			'quantity_confirmed' => 2,
+			'date_start' => '2026-12-19 15:00:00',
+			'date_end' => '2026-12-20 11:00:00',
+		), $user));
+		$this->assertSame(-2, $manager->confirm((int) $request->rowid, array(
+			'quantity_confirmed' => 1,
+			'date_start' => '2026-12-19 16:00:00',
+			'date_end' => '2026-12-20 11:00:00',
+		), $user));
+		$this->assertSame(ResourceSupplyRequestManager::STATUS_UNKNOWN, $this->fetchSupplyRequestForLine($context['line_id'])->request_status);
+		$this->assertSame(ResourceReservationManager::STATUS_AWAITING_SUPPLY, $this->fetchReservation('propaldet', $context['line_id'])->reservation_status);
+	}
+
+	/**
+	 * Exercise the complete forward path and prove that consumed is terminal.
+	 *
+	 * @return void
+	 */
+	public function testSupplyRequestForwardTransitionBatteryEndsInConsumed(): void
+	{
+		global $user;
+		$context = $this->createValidatedUnknownProposal(1.0, '2027-01-10 15:00:00', '2027-01-11 11:00:00');
+		$request = $this->fetchSupplyRequestForLine($context['line_id']);
+		$manager = new ResourceSupplyRequestManager($this->db);
+
+		$this->assertSame(ResourceSupplyRequestManager::STATUS_UNKNOWN, $request->request_status);
+		$this->assertSame(1, $manager->linkSupplierOrder((int) $request->rowid, 99001, 99002, $user));
+		$this->assertSame(ResourceSupplyRequestManager::STATUS_REQUESTED, $this->fetchSupplyRequestForLine($context['line_id'])->request_status);
+		$this->assertSame(1, $manager->confirm((int) $request->rowid, array(
+			'quantity_confirmed' => 1,
+			'date_start' => '2027-01-10 15:00:00',
+			'date_end' => '2027-01-11 11:00:00',
+		), $user));
+		$this->assertSame(ResourceSupplyRequestManager::STATUS_CONFIRMED, $this->fetchSupplyRequestForLine($context['line_id'])->request_status);
+		$this->assertSame(1, $this->runObjectTrigger('PROPAL_CLOSE_SIGNED', $context['proposal_id']));
+		$this->assertSame(ResourceSupplyRequestManager::STATUS_CONSUMED, $this->fetchSupplyRequestForLine($context['line_id'])->request_status);
+
+		$this->assertSame(1, $manager->linkSupplierOrder((int) $request->rowid, 99003, 99004, $user));
+		$this->assertSame(-2, $manager->confirm((int) $request->rowid, array(
+			'quantity_confirmed' => 1,
+			'date_start' => '2027-01-10 15:00:00',
+			'date_end' => '2027-01-11 11:00:00',
+		), $user));
+		$this->assertSame(1, $this->runObjectTrigger('PROPAL_CLOSE_REFUSED', $context['proposal_id']));
+		$this->assertSame(ResourceSupplyRequestManager::STATUS_CONSUMED, $this->fetchSupplyRequestForLine($context['line_id'])->request_status);
+		$this->assertSame(ResourceReservationManager::STATUS_CONFIRMED, $this->fetchReservation('propaldet', $context['line_id'])->reservation_status);
+	}
+
+	/**
+	 * Released availability cannot be consumed or confirmed again.
+	 *
+	 * @return void
+	 */
+	public function testReleasedSupplyRequestCannotTransitionBackward(): void
+	{
+		global $user;
+		$context = $this->createValidatedUnknownProposal(1.0, '2027-01-12 15:00:00', '2027-01-13 11:00:00');
+		$request = $this->fetchSupplyRequestForLine($context['line_id']);
+		$manager = new ResourceSupplyRequestManager($this->db);
+		$this->assertSame(1, $manager->confirm((int) $request->rowid, array(
+			'quantity_confirmed' => 1,
+			'date_start' => '2027-01-12 15:00:00',
+			'date_end' => '2027-01-13 11:00:00',
+		), $user));
+		$this->assertSame(1, $this->runObjectTrigger('PROPAL_CLOSE_REFUSED', $context['proposal_id']));
+		$this->assertSame(ResourceSupplyRequestManager::STATUS_RELEASED, $this->fetchSupplyRequestForLine($context['line_id'])->request_status);
+
+		$this->assertSame(1, $this->runObjectTrigger('PROPAL_CLOSE_SIGNED', $context['proposal_id']));
+		$this->assertSame(1, $manager->linkSupplierOrder((int) $request->rowid, 99005, 99006, $user));
+		$this->assertSame(-2, $manager->confirm((int) $request->rowid, array(
+			'quantity_confirmed' => 1,
+			'date_start' => '2027-01-12 15:00:00',
+			'date_end' => '2027-01-13 11:00:00',
+		), $user));
+		$this->assertSame(ResourceSupplyRequestManager::STATUS_RELEASED, $this->fetchSupplyRequestForLine($context['line_id'])->request_status);
+		$this->assertSame(ResourceReservationManager::STATUS_CANCELED, $this->fetchReservation('propaldet', $context['line_id'])->reservation_status);
+	}
+
+	/**
+	 * Supplier rejection is terminal and cannot be reopened as requested.
+	 *
+	 * @return void
+	 */
+	public function testRejectedSupplyRequestCannotTransitionBackward(): void
+	{
+		global $user;
+		$context = $this->createValidatedUnknownProposal(1.0, '2027-01-14 15:00:00', '2027-01-15 11:00:00');
+		$request = $this->fetchSupplyRequestForLine($context['line_id']);
+		$manager = new ResourceSupplyRequestManager($this->db);
+		$this->assertSame(1, $manager->linkSupplierOrder((int) $request->rowid, 99007, 99008, $user));
+		$this->assertSame(1, $manager->handleSupplierOrderTrigger('ORDER_SUPPLIER_REFUSE', 99007, $user));
+		$this->assertSame(ResourceSupplyRequestManager::STATUS_REJECTED, $this->fetchSupplyRequestForLine($context['line_id'])->request_status);
+
+		$this->assertSame(1, $manager->linkSupplierOrder((int) $request->rowid, 99009, 99010, $user));
+		$this->assertSame(-2, $manager->confirm((int) $request->rowid, array(
+			'quantity_confirmed' => 1,
+			'date_start' => '2027-01-14 15:00:00',
+			'date_end' => '2027-01-15 11:00:00',
+		), $user));
+		$this->assertSame(ResourceSupplyRequestManager::STATUS_REJECTED, $this->fetchSupplyRequestForLine($context['line_id'])->request_status);
+	}
+
+	/**
+	 * A supplier may exceptionally revoke confirmed availability; the assignment
+	 * is moved to the next resource and an urgent supplier alert is recorded.
+	 *
+	 * @return void
+	 */
+	public function testSupplierRevokesConfirmedServiceAndAssignmentIsReplaced(): void
+	{
+		global $user;
+		$this->insertSupplierPriceFixture();
+		$context = $this->createValidatedUnknownProposal(1.0, '2027-03-10 15:00:00', '2027-03-11 11:00:00');
+		$request = $this->fetchSupplyRequestForLine($context['line_id']);
+		$manager = new ResourceSupplyRequestManager($this->db);
+		$this->assertSame(1, $manager->linkSupplierOrder((int) $request->rowid, 99101, 99102, $user));
+		$this->assertSame(1, $manager->confirm((int) $request->rowid, array(
+			'quantity_confirmed' => 1,
+			'date_start' => '2027-03-10 15:00:00',
+			'date_end' => '2027-03-11 11:00:00',
+		), $user));
+
+		$this->assertSame(1, $manager->handleSupplierOrderTrigger('ORDER_SUPPLIER_REFUSE', 99101, $user));
+		$this->assertSame(ResourceSupplyRequestManager::STATUS_UNAVAILABLE, $this->fetchSupplyRequestForLine($context['line_id'])->request_status);
+		$this->assertSame($this->secondResourceId, (int) $this->fetchReservation('propaldet', $context['line_id'])->resource_id);
+		$this->assertSame(Dolresource::STATUS_UNKNOWN, $this->fetchResourceStatus($this->firstResourceId));
+		$alert = $this->fetchLastOutOfServiceAlert('AC_RESOURCE_SUPPLIER_REVOKED');
+		$this->assertNotNull($alert);
+		$this->assertSame($this->thirdPartyId, (int) $alert->fk_soc);
+		$this->assertStringContainsString('ORDER_SUPPLIER_REFUSE', $alert->note_private);
+		$this->assertStringContainsString('PHPUNIT_RESOURCE_SECOND', $alert->note_private);
+	}
+
+	/**
+	 * A revocation remains actionable after customer acceptance; without an
+	 * alternative the reservation becomes unavailable and cannot be confirmed again.
+	 *
+	 * @return void
+	 */
+	public function testSupplierRevokesConsumedServiceWithoutReplacement(): void
+	{
+		global $user;
+		$this->insertSupplierPriceFixture();
+		$sql = 'UPDATE '.MAIN_DB_PREFIX.'resource SET fk_statut='.Dolresource::STATUS_OUT_OF_SERVICE;
+		$sql .= ' WHERE rowid='.((int) $this->secondResourceId);
+		$this->assertTrue((bool) $this->db->query($sql));
+		$context = $this->createValidatedUnknownProposal(1.0, '2027-03-12 15:00:00', '2027-03-13 11:00:00');
+		$request = $this->fetchSupplyRequestForLine($context['line_id']);
+		$manager = new ResourceSupplyRequestManager($this->db);
+		$this->assertSame(1, $manager->confirm((int) $request->rowid, array(
+			'quantity_confirmed' => 1,
+			'date_start' => '2027-03-12 15:00:00',
+			'date_end' => '2027-03-13 11:00:00',
+		), $user));
+		$this->assertSame(1, $this->runObjectTrigger('PROPAL_CLOSE_SIGNED', $context['proposal_id']));
+		$this->assertSame(ResourceSupplyRequestManager::STATUS_CONSUMED, $this->fetchSupplyRequestForLine($context['line_id'])->request_status);
+
+		$this->assertSame(1, $manager->revokeAccepted((int) $request->rowid, 'Hotel withdrew the room', $user));
+		$this->assertSame(ResourceSupplyRequestManager::STATUS_UNAVAILABLE, $this->fetchSupplyRequestForLine($context['line_id'])->request_status);
+		$this->assertSame(ResourceReservationManager::STATUS_UNAVAILABLE, $this->fetchReservation('propaldet', $context['line_id'])->reservation_status);
+		$this->assertSame(-2, $manager->confirm((int) $request->rowid, array(
+			'quantity_confirmed' => 1,
+			'date_start' => '2027-03-12 15:00:00',
+			'date_end' => '2027-03-13 11:00:00',
+		), $user));
 	}
 
 	/**
@@ -880,6 +1271,16 @@ class ResourceReservationTest extends TestCase
 		), $user);
 		$this->assertGreaterThan(0, $requestId);
 		$this->assertSame(1, $manager->linkSupplierOrder($requestId, 8801, 8802, $user));
+		$this->insert('commande_fournisseur', array(
+			'rowid' => 8801,
+			'ref' => 'PHPUNIT-SUPPLIER-ORDER-8801',
+			'entity' => 1,
+			'fk_soc' => $this->thirdPartyId,
+			'date_creation' => '2026-01-01 08:00:00',
+			'fk_user_author' => $user->id,
+			'fk_statut' => 1,
+			'source' => 0,
+		));
 
 		$order = new stdClass();
 		$order->id = 8801;
@@ -889,6 +1290,86 @@ class ResourceReservationTest extends TestCase
 		$this->assertSame(ResourceSupplyRequestManager::STATUS_REQUESTED, $request->request_status);
 		$this->assertSame('ORDER_SUPPLIER_APPROVE', $request->supplier_order_status);
 		$this->assertSame(ResourceReservationManager::STATUS_AWAITING_SUPPLY, $this->fetchReservation('propaldet', 99881)->reservation_status);
+
+		$this->assertSame(1, $this->trigger->runTrigger('ORDER_SUPPLIER_SUBMIT', $order, $user, $langs, $conf));
+		$request = $this->fetchSupplyRequestForLine(99881);
+		$this->assertSame(ResourceSupplyRequestManager::STATUS_REQUESTED, $request->request_status);
+		$this->assertSame(ResourceReservationManager::STATUS_AWAITING_SUPPLY, $this->fetchReservation('propaldet', 99881)->reservation_status);
+
+		$sql = 'UPDATE '.MAIN_DB_PREFIX.'commande_fournisseur SET fk_statut='.CommandeFournisseur::STATUS_RECEIVED_PARTIALLY.' WHERE rowid=8801';
+		$this->assertTrue((bool) $this->db->query($sql));
+		$this->assertSame(1, $this->trigger->runTrigger('ORDER_SUPPLIER_RECEIVE', $order, $user, $langs, $conf));
+		$request = $this->fetchSupplyRequestForLine(99881);
+		$this->assertSame(ResourceSupplyRequestManager::STATUS_CONFIRMED, $request->request_status);
+		$this->assertSame('ORDER_SUPPLIER_RECEIVE_PARTIAL', $request->supplier_order_status);
+		$this->assertSame(ResourceReservationManager::STATUS_CONFIRMED, $this->fetchReservation('propaldet', 99881)->reservation_status);
+
+		$sql = 'UPDATE '.MAIN_DB_PREFIX.'commande_fournisseur SET fk_statut='.CommandeFournisseur::STATUS_RECEIVED_COMPLETELY.' WHERE rowid=8801';
+		$this->assertTrue((bool) $this->db->query($sql));
+		$this->assertSame(1, $this->trigger->runTrigger('ORDER_SUPPLIER_RECEIVE', $order, $user, $langs, $conf));
+		$request = $this->fetchSupplyRequestForLine(99881);
+		$this->assertSame(ResourceSupplyRequestManager::STATUS_CONFIRMED, $request->request_status);
+		$this->assertSame('ORDER_SUPPLIER_RECEIVE_COMPLETE', $request->supplier_order_status);
+		$this->assertSame(ResourceReservationManager::STATUS_CONFIRMED, $this->fetchReservation('propaldet', 99881)->reservation_status);
+	}
+
+	/**
+	 * Customer acceptance before supplier reception is remembered. A partial
+	 * supplier reception confirms availability and consumes it immediately.
+	 *
+	 * @return void
+	 */
+	public function testAcceptedProposalConsumesLaterPartialSupplierReception(): void
+	{
+		global $user;
+		$context = $this->createValidatedUnknownProposal(1.0, '2027-05-01 15:00:00', '2027-05-02 11:00:00');
+		$request = $this->fetchSupplyRequestForLine($context['line_id']);
+		$manager = new ResourceSupplyRequestManager($this->db);
+		$this->assertSame(1, $manager->linkSupplierOrder((int) $request->rowid, 99882, 99883, $user));
+		$this->insert('commande_fournisseur', array(
+			'rowid' => 99882,
+			'ref' => 'PHPUNIT-SUPPLIER-ORDER-99882',
+			'entity' => 1,
+			'fk_soc' => $this->thirdPartyId,
+			'date_creation' => '2027-01-01 08:00:00',
+			'fk_user_author' => $user->id,
+			'fk_statut' => CommandeFournisseur::STATUS_VALIDATED,
+			'source' => 0,
+		));
+
+		$sql = 'UPDATE '.MAIN_DB_PREFIX.'propal SET fk_statut=2 WHERE rowid='.((int) $context['proposal_id']);
+		$this->assertTrue((bool) $this->db->query($sql));
+		$this->assertSame(1, $this->runObjectTrigger('PROPAL_CLOSE_SIGNED', $context['proposal_id']));
+		$this->assertSame(ResourceSupplyRequestManager::STATUS_REQUESTED, $this->fetchSupplyRequestForLine($context['line_id'])->request_status);
+
+		$sql = 'UPDATE '.MAIN_DB_PREFIX.'commande_fournisseur SET fk_statut='.CommandeFournisseur::STATUS_RECEIVED_PARTIALLY.' WHERE rowid=99882';
+		$this->assertTrue((bool) $this->db->query($sql));
+		$this->assertSame(1, $this->runObjectTrigger('ORDER_SUPPLIER_RECEIVE', 99882));
+		$request = $this->fetchSupplyRequestForLine($context['line_id']);
+		$this->assertSame(ResourceSupplyRequestManager::STATUS_CONSUMED, $request->request_status);
+		$this->assertSame('ORDER_SUPPLIER_RECEIVE_PARTIAL', $request->supplier_order_status);
+		$this->assertSame(ResourceReservationManager::STATUS_CONFIRMED, $this->fetchReservation('propaldet', $context['line_id'])->reservation_status);
+	}
+
+	/**
+	 * A validated contract waits for an unknown resource. Reopening the contract
+	 * cancels the pending request and its assignment.
+	 *
+	 * @return void
+	 */
+	public function testUnknownContractWaitsForSupplierAndReopenCancelsDemand(): void
+	{
+		$sql = 'UPDATE '.MAIN_DB_PREFIX.'resource SET fk_statut='.Dolresource::STATUS_UNKNOWN;
+		$sql .= ' WHERE rowid='.((int) $this->firstResourceId);
+		$this->assertTrue((bool) $this->db->query($sql));
+		$lineId = $this->createContractLine(1.0, '2027-05-03 15:00:00', '2027-05-04 11:00:00');
+		$sql = 'SELECT fk_contrat FROM '.MAIN_DB_PREFIX.'contratdet WHERE rowid='.((int) $lineId);
+		$contractId = (int) $this->db->fetch_object($this->db->query($sql))->fk_contrat;
+
+		$this->assertSame(1, $this->runObjectTrigger('CONTRACT_VALIDATE', $contractId));
+		$this->assertSame(ResourceReservationManager::STATUS_AWAITING_SUPPLY, $this->fetchReservation('contratdet', $lineId)->reservation_status);
+		$this->assertSame(1, $this->runObjectTrigger('CONTRACT_REOPEN', $contractId));
+		$this->assertSame(ResourceReservationManager::STATUS_CANCELED, $this->fetchReservation('contratdet', $lineId)->reservation_status);
 	}
 
 	/**
@@ -1005,6 +1486,7 @@ class ResourceReservationTest extends TestCase
 			'resource_type' => 'dolresource',
 			'relation_kind' => 'assignment',
 			'capacity_used' => $capacity,
+			'resource_units_used' => 1,
 			'date_start' => $dateStart,
 			'date_end' => $dateEnd,
 			'reservation_status' => $status,
@@ -1071,6 +1553,75 @@ class ResourceReservationTest extends TestCase
 	{
 		$sql = 'SELECT fk_statut FROM '.MAIN_DB_PREFIX.'resource WHERE rowid='.((int) $resourceId);
 		return (int) $this->db->fetch_object($this->db->query($sql))->fk_statut;
+	}
+
+	/**
+	 * Create and validate a proposal that uses the first resource as unknown.
+	 *
+	 * @param float  $quantity  Service and resource-unit quantity
+	 * @param string $dateStart Requested start
+	 * @param string $dateEnd   Requested end
+	 * @return array{line_id:int,proposal_id:int}
+	 */
+	private function createValidatedUnknownProposal($quantity, $dateStart, $dateEnd)
+	{
+		$sql = 'UPDATE '.MAIN_DB_PREFIX.'resource SET fk_statut='.Dolresource::STATUS_UNKNOWN;
+		$sql .= ' WHERE rowid='.((int) $this->firstResourceId);
+		$this->assertTrue((bool) $this->db->query($sql));
+		$lineId = $this->createProposalLine($quantity, $dateStart, $dateEnd);
+		$sql = 'SELECT fk_propal FROM '.MAIN_DB_PREFIX.'propaldet WHERE rowid='.((int) $lineId);
+		$proposal = $this->db->fetch_object($this->db->query($sql));
+		$proposalId = (int) $proposal->fk_propal;
+		$this->assertSame(1, $this->runObjectTrigger('PROPAL_VALIDATE', $proposalId));
+		return array('line_id' => $lineId, 'proposal_id' => $proposalId);
+	}
+
+	/**
+	 * Fetch the supply request generated for a proposal line.
+	 *
+	 * @param int $lineId Proposal line id
+	 * @return object|null
+	 */
+	private function fetchSupplyRequestForLine($lineId)
+	{
+		$sql = 'SELECT sr.* FROM '.MAIN_DB_PREFIX.'resource_supply_request sr';
+		$sql .= ' INNER JOIN '.MAIN_DB_PREFIX.'element_resources er ON er.rowid=sr.fk_element_resource';
+		$sql .= " WHERE er.element_type='propaldet' AND er.element_id=".((int) $lineId);
+		$sql .= ' ORDER BY sr.rowid DESC'.$this->db->plimit(1);
+		$resql = $this->db->query($sql);
+		return $resql ? ($this->db->fetch_object($resql) ?: null) : null;
+	}
+
+	/**
+	 * Fetch the most recent automatic resource outage alert.
+	 *
+	 * @param string $code Agenda action code
+	 * @return object|null
+	 */
+	private function fetchLastOutOfServiceAlert($code = 'AC_RESOURCE_OUT_OF_SERVICE')
+	{
+		$sql = 'SELECT rowid, code, label, note as note_private, fk_soc FROM '.MAIN_DB_PREFIX.'actioncomm';
+		$sql .= " WHERE code='".$this->db->escape($code)."' ORDER BY rowid DESC";
+		$sql .= $this->db->plimit(1);
+		$resql = $this->db->query($sql);
+		return $resql ? ($this->db->fetch_object($resql) ?: null) : null;
+	}
+
+	/**
+	 * Add the supplier-price relation used to identify an external resource owner.
+	 *
+	 * @return void
+	 */
+	private function insertSupplierPriceFixture()
+	{
+		$this->insert('product_fournisseur_price', array(
+			'entity' => 1,
+			'fk_product' => $this->serviceId,
+			'fk_soc' => $this->thirdPartyId,
+			'ref_fourn' => 'PHPUNIT-EXTERNAL-ROOM',
+			'quantity' => 1,
+			'tva_tx' => 0,
+		));
 	}
 
 	/**

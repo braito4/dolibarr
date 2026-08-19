@@ -18,6 +18,25 @@ class ResourceRequirementManager
 	}
 
 	/**
+	 * Return the default alternative group for a resource role.
+	 *
+	 * Resources with the same group are ordered alternatives. Using the role in
+	 * the default keeps capacity, equipment and operator requirements separate.
+	 *
+	 * @param string $resourceRole Resource role
+	 * @return string Default alternative group
+	 */
+	public static function getDefaultRequirementGroup($resourceRole)
+	{
+		$allowedResourceRoles = array('capacity', 'production', 'delivery', 'equipment', 'operator');
+		if (!in_array($resourceRole, $allowedResourceRoles, true)) {
+			$resourceRole = 'capacity';
+		}
+
+		return 'preferred_'.$resourceRole;
+	}
+
+	/**
 	 * Return requirements configured on an element.
 	 *
 	 * @param string $elementType Requirement source type

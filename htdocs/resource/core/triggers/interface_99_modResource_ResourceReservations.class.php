@@ -10,6 +10,7 @@
 require_once DOL_DOCUMENT_ROOT.'/core/triggers/dolibarrtriggers.class.php';
 require_once DOL_DOCUMENT_ROOT.'/resource/class/resourcereservationmanager.class.php';
 require_once DOL_DOCUMENT_ROOT.'/resource/class/resourcesupplyrequestmanager.class.php';
+require_once DOL_DOCUMENT_ROOT.'/resource/class/dolresource.class.php';
 
 /**
  * Synchronize provisional proposal reservations and confirmed contract reservations.
@@ -46,6 +47,9 @@ class InterfaceResourceReservations extends DolibarrTriggers
 			return 0;
 		}
 		if (strpos($action, 'ORDER_SUPPLIER_') === 0) {
+			if (isModEnabled('recursosbetabr4ito')) {
+				return 0;
+			}
 			$manager = new ResourceSupplyRequestManager($this->db);
 			return $manager->handleSupplierOrderTrigger($action, (int) $object->id, $user);
 		}
@@ -53,8 +57,29 @@ class InterfaceResourceReservations extends DolibarrTriggers
 		if ($action === 'CONTRACT_VALIDATE') {
 			return $this->synchronizeContractReservations((int) $object->id, $user, $langs);
 		}
+		if (in_array($action, array('CONTRACT_REOPEN', 'CONTRACT_DELETE'), true)) {
+			if (isModEnabled('recursosbetabr4ito')) {
+				return 0;
+			}
+			$manager = new ResourceSupplyRequestManager($this->db);
+			return $manager->handleContractOutcome((int) $object->id, false, $user);
+		}
 		if ($action === 'PROPAL_VALIDATE') {
 			return $this->synchronizeProposalReservations((int) $object->id, $user, $langs);
+		}
+		if ($action === 'PROPAL_CLOSE_SIGNED') {
+			if (isModEnabled('recursosbetabr4ito')) {
+				return 0;
+			}
+			$manager = new ResourceSupplyRequestManager($this->db);
+			return $manager->handleProposalOutcome((int) $object->id, true, $user);
+		}
+		if (in_array($action, array('PROPAL_CLOSE_REFUSED', 'PROPAL_CANCEL', 'PROPAL_DELETE'), true)) {
+			if (isModEnabled('recursosbetabr4ito')) {
+				return 0;
+			}
+			$manager = new ResourceSupplyRequestManager($this->db);
+			return $manager->handleProposalOutcome((int) $object->id, false, $user);
 		}
 
 		$isProposal = strpos($action, 'LINEPROPAL_') === 0;
@@ -77,6 +102,13 @@ class InterfaceResourceReservations extends DolibarrTriggers
 		}
 
 		$elementType = $isProposal ? 'propaldet' : ($isOrder ? 'commandedet' : 'contratdet');
+		if ($isContract && $action === 'LINECONTRACT_CLOSE') {
+			if (isModEnabled('recursosbetabr4ito')) {
+				return 0;
+			}
+			$manager = new ResourceSupplyRequestManager($this->db);
+			return $manager->handleLineOutcome('contratdet', $lineId, false, $user);
+		}
 		if (substr($action, -7) === '_DELETE') {
 			return $this->deleteLineReservation($elementType, $lineId);
 		}
@@ -86,7 +118,8 @@ class InterfaceResourceReservations extends DolibarrTriggers
 			return $this->deleteLineReservation($elementType, $lineId);
 		}
 
-		return $this->synchronizeLineReservation($elementType, $line, $user, $langs);
+		$forceAvailability = $isContract && !empty($line->parent_status);
+		return $this->synchronizeLineReservation($elementType, $line, $user, $langs, null, $forceAvailability);
 	}
 
 	/**
@@ -108,7 +141,7 @@ class InterfaceResourceReservations extends DolibarrTriggers
 		while ($row = $this->db->fetch_object($resql)) {
 			$line = $this->fetchLine('contratdet', (int) $row->rowid);
 			if ($line && !empty($line->fk_product) && (int) $line->product_type === 1
-				&& $this->synchronizeLineReservation('contratdet', $line, $user, $langs, true) < 0) {
+				&& $this->synchronizeLineReservation('contratdet', $line, $user, $langs, true, true) < 0) {
 				return -1;
 			}
 		}
@@ -179,6 +212,16 @@ class InterfaceResourceReservations extends DolibarrTriggers
 	 */
 	private function deleteLineReservation($elementType, $lineId)
 	{
+		$sql = 'UPDATE '.MAIN_DB_PREFIX.'resource_supply_request SET request_status=CASE';
+		$sql .= " WHEN request_status IN ('confirmed','consumed') THEN 'released'";
+		$sql .= " WHEN request_status IN ('unknown','requested') THEN 'canceled'";
+		$sql .= ' ELSE request_status END, fk_element_resource=NULL';
+		$sql .= ' WHERE fk_element_resource IN (SELECT rowid FROM '.MAIN_DB_PREFIX.'element_resources';
+		$sql .= " WHERE element_type='".$this->db->escape($elementType)."' AND element_id=".((int) $lineId).')';
+		if (!$this->db->query($sql)) {
+			$this->errors[] = $this->db->lasterror();
+			return -1;
+		}
 		$sql = 'DELETE FROM '.MAIN_DB_PREFIX.'element_resources';
 		$sql .= " WHERE element_type = '".$this->db->escape($elementType)."'";
 		$sql .= ' AND element_id = '.((int) $lineId);
@@ -206,7 +249,7 @@ class InterfaceResourceReservations extends DolibarrTriggers
 			return -1;
 		}
 
-		$sql = 'SELECT er.*, r.max_users, r.allow_overflow as resource_allow_overflow, r.metric_value, r.max_payload_weight, r.operational_location, r.cooldown_minutes, ty.capacity_mode';
+		$sql = 'SELECT er.*, r.fk_statut as resource_status, r.max_users, r.available_units, r.allow_overflow as resource_allow_overflow, r.metric_value, r.max_payload_weight, r.operational_location, r.cooldown_minutes, ty.capacity_mode';
 		$sql .= ' FROM '.MAIN_DB_PREFIX.'element_resources er';
 		$sql .= ' INNER JOIN '.MAIN_DB_PREFIX.'resource r ON r.rowid = er.resource_id';
 		$sql .= ' LEFT JOIN '.MAIN_DB_PREFIX.'c_type_resource ty ON ty.code = r.fk_code_type_resource';
@@ -214,7 +257,7 @@ class InterfaceResourceReservations extends DolibarrTriggers
 		$sql .= ' AND er.element_id = '.((int) $line->fk_product);
 		$sql .= " AND er.resource_type = 'dolresource'";
 		$sql .= " AND (er.relation_kind IS NULL OR er.relation_kind = 'requirement')";
-		$sql .= ' AND r.fk_statut = 1';
+		$sql .= ' AND r.fk_statut IN (0, 1)';
 		$sql .= ' ORDER BY er.requirement_group, er.position, er.rowid';
 		$resql = $this->db->query($sql);
 		if (!$resql || !$this->db->num_rows($resql)) {
@@ -259,6 +302,7 @@ class InterfaceResourceReservations extends DolibarrTriggers
 		}
 		$confirmedAssignments = array();
 		$plannedCapacity = array();
+		$plannedUnits = array();
 		$bulkAvailabilityLoaded = false;
 		if ($checkAvailability && !empty($commonStart) && !empty($commonEnd)) {
 			$resourceIds = array();
@@ -289,9 +333,12 @@ class InterfaceResourceReservations extends DolibarrTriggers
 				$dateStart = $commonStart;
 				$dateEnd = $commonEnd;
 				$cooldown = max(0, (int) $preference->cooldown_minutes);
-				$maximumCapacity = $preference->capacity_mode === 'users'
+				$availableUnits = max(1, (int) $preference->available_units);
+				$requiredUnits = max(1, (int) ceil(abs((float) $line->qty) * max(1.0, (float) $preference->quantity_required)));
+				$capacityPerUnit = $preference->capacity_mode === 'users'
 					? (float) $preference->max_users
 					: ($preference->capacity_mode === 'volume' ? (float) $preference->metric_value : 1.0);
+				$maximumCapacity = $capacityPerUnit * $availableUnits;
 				if (!empty($dateEnd) && $cooldown > 0) {
 					$dateEnd = $this->db->idate($this->db->jdate($dateEnd) + ($cooldown * 60));
 				}
@@ -310,23 +357,30 @@ class InterfaceResourceReservations extends DolibarrTriggers
 				if ($needsAutomaticSlot && (empty($dateStart) || empty($dateEnd))) {
 					continue;
 				}
-				$fitsPayload = $payloadWeightUsed <= 0 || (!empty($preference->max_payload_weight) && $payloadWeightUsed <= (float) $preference->max_payload_weight);
+				$maximumPayload = (float) $preference->max_payload_weight * $requiredUnits;
+				$fitsPayload = $payloadWeightUsed <= 0 || ($maximumPayload > 0 && $payloadWeightUsed <= $maximumPayload);
 				$fitsLocation = empty($preference->required_location)
 					|| strcasecmp(trim((string) $preference->required_location), trim((string) $preference->operational_location)) === 0;
-				$fitsResourceCapacity = $capacityUsed > 0 && $capacityUsed <= $maximumCapacity && $fitsPayload && $fitsLocation;
+				$fitsResourceCapacity = $capacityUsed > 0 && $capacityUsed <= ($capacityPerUnit * $requiredUnits) && $requiredUnits <= $availableUnits && $fitsPayload && $fitsLocation;
 				$capacityKey = ((int) $preference->resource_id).'|'.$dateStart.'|'.$dateEnd;
 				$occupied = 0.0;
+				$occupiedUnits = 0;
 				if ($checkAvailability && !empty($dateStart) && !empty($dateEnd)) {
 					$occupied = $bulkAvailabilityLoaded
 						? $manager->getOccupiedCapacityFromAssignments($confirmedAssignments, (int) $preference->resource_id, $dateStart, $dateEnd)
 						: $manager->getOccupiedCapacity('dolresource', (int) $preference->resource_id, $dateStart, $dateEnd);
 					$occupied += $plannedCapacity[$capacityKey] ?? 0.0;
+					$occupiedUnits = $bulkAvailabilityLoaded
+						? $manager->getOccupiedResourceUnitsFromAssignments($confirmedAssignments, (int) $preference->resource_id, $dateStart, $dateEnd)
+						: 0;
+					$occupiedUnits += $plannedUnits[$capacityKey] ?? 0;
 				}
-				$canAllocate = !$checkAvailability ? $fitsResourceCapacity : ($fitsResourceCapacity && !empty($dateStart) && !empty($dateEnd) && ($occupied + $capacityUsed) <= $maximumCapacity);
+				$canAllocate = !$checkAvailability ? $fitsResourceCapacity : ($fitsResourceCapacity && !empty($dateStart) && !empty($dateEnd) && ($occupied + $capacityUsed) <= $maximumCapacity && ($occupiedUnits + $requiredUnits) <= $availableUnits);
 				if ($canAllocate) {
 					$selected = $preference;
 					$selected->load_volume_used = $preference->capacity_mode === 'volume' ? $capacityUsed : 0.0;
 					$selected->capacity_used = $preference->capacity_mode === 'volume' ? $maximumCapacity : $capacityUsed;
+					$selected->resource_units_used = $requiredUnits;
 					$selected->payload_weight_used = $payloadWeightUsed;
 					$selected->assignment_start = $dateStart;
 					$selected->assignment_end = $dateEnd;
@@ -369,6 +423,7 @@ class InterfaceResourceReservations extends DolibarrTriggers
 					$overflowSelection->load_volume_used = $remainingVolume * $allocationRatio;
 					$overflowSelection->payload_weight_used = $remainingWeight * $allocationRatio;
 					$overflowSelection->capacity_used = $maximumVolume;
+					$overflowSelection->resource_units_used = 1;
 					$overflowSelection->assignment_start = $commonStart;
 					$overflowSelection->assignment_end = $commonEnd;
 					$splitAssignments[] = $overflowSelection;
@@ -385,6 +440,7 @@ class InterfaceResourceReservations extends DolibarrTriggers
 			$wholeQuantity = (int) abs((float) $line->qty);
 			if (!$selected && empty($splitAssignments) && $wholeQuantity > 1 && (float) $wholeQuantity === abs((float) $line->qty) && !in_array($alternatives[0]->capacity_metrics, array('volume', 'volume_weight'), true)) {
 				$stagedCapacity = array();
+				$stagedUnits = array();
 				for ($unit = 0; $unit < $wholeQuantity; $unit++) {
 					$unitSelection = null;
 					foreach ($alternatives as $preference) {
@@ -392,7 +448,9 @@ class InterfaceResourceReservations extends DolibarrTriggers
 						$dateStart = $commonStart;
 						$dateEnd = $commonEnd;
 						$cooldown = max(0, (int) $preference->cooldown_minutes);
-						$maximumCapacity = ($preference->capacity_mode === 'users') ? (float) $preference->max_users : 1.0;
+						$availableUnits = max(1, (int) $preference->available_units);
+						$capacityPerUnit = ($preference->capacity_mode === 'users') ? (float) $preference->max_users : 1.0;
+						$maximumCapacity = $capacityPerUnit * $availableUnits;
 						if (!empty($dateEnd) && $cooldown > 0) {
 							$dateEnd = $this->db->idate($this->db->jdate($dateEnd) + ($cooldown * 60));
 						}
@@ -402,21 +460,27 @@ class InterfaceResourceReservations extends DolibarrTriggers
 						$resourceId = (int) $preference->resource_id;
 						$capacityKey = $resourceId.'|'.$dateStart.'|'.$dateEnd;
 						$alreadyStaged = isset($stagedCapacity[$capacityKey]) ? $stagedCapacity[$capacityKey] : 0.0;
+						$unitsAlreadyStaged = $stagedUnits[$capacityKey] ?? 0;
 						$occupied = 0.0;
+						$occupiedUnits = 0;
 						if ($checkAvailability) {
 							$occupied = $bulkAvailabilityLoaded
 								? $manager->getOccupiedCapacityFromAssignments($confirmedAssignments, $resourceId, $dateStart, $dateEnd)
 								: $manager->getOccupiedCapacity('dolresource', $resourceId, $dateStart, $dateEnd);
 							$occupied += $plannedCapacity[$capacityKey] ?? 0.0;
+							$occupiedUnits = $manager->getOccupiedResourceUnitsFromAssignments($confirmedAssignments, $resourceId, $dateStart, $dateEnd);
+							$occupiedUnits += $plannedUnits[$capacityKey] ?? 0;
 						}
-						if (($occupied + $alreadyStaged + $capacityUsed) > $maximumCapacity) {
+						if (($occupied + $alreadyStaged + $capacityUsed) > $maximumCapacity || ($occupiedUnits + $unitsAlreadyStaged + 1) > $availableUnits) {
 							continue;
 						}
 						$unitSelection = clone $preference;
 						$unitSelection->capacity_used = $capacityUsed;
+						$unitSelection->resource_units_used = 1;
 						$unitSelection->assignment_start = $dateStart;
 						$unitSelection->assignment_end = $dateEnd;
 						$stagedCapacity[$capacityKey] = $alreadyStaged + $capacityUsed;
+						$stagedUnits[$capacityKey] = $unitsAlreadyStaged + 1;
 						break;
 					}
 					if (!$unitSelection) {
@@ -428,12 +492,22 @@ class InterfaceResourceReservations extends DolibarrTriggers
 			}
 			if (!empty($splitAssignments)) {
 				foreach ($splitAssignments as $splitAssignment) {
-					if (!$this->insertAssignment($elementType, $line, $splitAssignment, 1.0, $isConfirmed, $user)) {
+					$reservationStatus = $isConfirmed ? ResourceReservationManager::STATUS_CONFIRMED : ResourceReservationManager::STATUS_PROVISIONAL;
+					if ($forceAvailability && (int) $splitAssignment->resource_status === Dolresource::STATUS_UNKNOWN) {
+						$reservationStatus = ResourceReservationManager::STATUS_AWAITING_SUPPLY;
+					}
+					$assignmentId = $this->insertAssignment($elementType, $line, $splitAssignment, 1.0, $reservationStatus, $user);
+					if (!$assignmentId) {
 						$this->deleteLineReservation($elementType, (int) $line->rowid);
+						return -1;
+					}
+					if ($reservationStatus === ResourceReservationManager::STATUS_AWAITING_SUPPLY
+						&& $this->createSupplyRequest($assignmentId, $line, $splitAssignment, $user) < 0) {
 						return -1;
 					}
 					$capacityKey = ((int) $splitAssignment->resource_id).'|'.$splitAssignment->assignment_start.'|'.$splitAssignment->assignment_end;
 					$plannedCapacity[$capacityKey] = ($plannedCapacity[$capacityKey] ?? 0.0) + (float) $splitAssignment->capacity_used;
+					$plannedUnits[$capacityKey] = ($plannedUnits[$capacityKey] ?? 0) + (int) $splitAssignment->resource_units_used;
 				}
 				continue;
 			}
@@ -449,13 +523,58 @@ class InterfaceResourceReservations extends DolibarrTriggers
 				$commonStart = $selected->assignment_start;
 				$commonEnd = $selected->assignment_end;
 			}
-			if (!$this->insertAssignment($elementType, $line, $selected, (float) $line->qty, $isConfirmed, $user)) {
+			$reservationStatus = $isConfirmed ? ResourceReservationManager::STATUS_CONFIRMED : ResourceReservationManager::STATUS_PROVISIONAL;
+			if ($forceAvailability && (int) $selected->resource_status === Dolresource::STATUS_UNKNOWN) {
+				$reservationStatus = ResourceReservationManager::STATUS_AWAITING_SUPPLY;
+			}
+			$assignmentId = $this->insertAssignment($elementType, $line, $selected, (float) $line->qty, $reservationStatus, $user);
+			if (!$assignmentId) {
+				return -1;
+			}
+			if ($reservationStatus === ResourceReservationManager::STATUS_AWAITING_SUPPLY
+				&& $this->createSupplyRequest($assignmentId, $line, $selected, $user) < 0) {
 				return -1;
 			}
 			$capacityKey = ((int) $selected->resource_id).'|'.$selected->assignment_start.'|'.$selected->assignment_end;
 			$plannedCapacity[$capacityKey] = ($plannedCapacity[$capacityKey] ?? 0.0) + (float) $selected->capacity_used;
+			$plannedUnits[$capacityKey] = ($plannedUnits[$capacityKey] ?? 0) + (int) $selected->resource_units_used;
 		}
 		return 1;
+	}
+
+	/**
+	 * Create the confirmation request for an assignment using an unknown resource.
+	 *
+	 * @param int    $assignmentId Assignment id
+	 * @param object $line         Source service line
+	 * @param object $selected     Selected resource requirement
+	 * @param User   $user         Acting user
+	 * @return int Request id, negative on error
+	 */
+	private function createSupplyRequest($assignmentId, $line, $selected, User $user)
+	{
+		$supplierId = 0;
+		$sql = 'SELECT fk_soc FROM '.MAIN_DB_PREFIX.'product_fournisseur_price';
+		$sql .= ' WHERE fk_product='.((int) $line->fk_product).' AND entity IN ('.getEntity('productprice').')';
+		$sql .= ' ORDER BY rowid ASC';
+		$sql .= $this->db->plimit(1);
+		$resql = $this->db->query($sql);
+		if ($resql && ($supplier = $this->db->fetch_object($resql))) {
+			$supplierId = (int) $supplier->fk_soc;
+		}
+		$manager = new ResourceSupplyRequestManager($this->db);
+		return $manager->create(array(
+			'entity' => getEntity('resource'),
+			'fk_element_resource' => $assignmentId,
+			'fk_resource' => (int) $selected->resource_id,
+			'request_type' => $supplierId > 0 ? 'supplier' : 'owner',
+			'fk_soc_supplier' => $supplierId,
+			'fk_product_supplier' => (int) $line->fk_product,
+			'quantity_requested' => max(1, (int) $selected->resource_units_used),
+			'date_start' => (string) $selected->assignment_start,
+			'date_end' => (string) $selected->assignment_end,
+			'timezone' => getDolGlobalString('MAIN_TIMEZONE', 'UTC'),
+		), $user);
 	}
 
 	/**
@@ -486,28 +605,28 @@ class InterfaceResourceReservations extends DolibarrTriggers
 	 * @param object   $line           Source line
 	 * @param object   $selected       Selected requirement
 	 * @param float    $serviceQuantity Service quantity
-	 * @param bool     $isConfirmed    Whether the assignment is confirmed
+	 * @param string   $reservationStatus Reservation status
 	 * @param User     $user           Acting user
 	 * @return bool
 	 */
-	private function insertAssignment($elementType, $line, $selected, $serviceQuantity, $isConfirmed, User $user)
+	private function insertAssignment($elementType, $line, $selected, $serviceQuantity, $reservationStatus, User $user)
 	{
 		$sql = 'INSERT INTO '.MAIN_DB_PREFIX.'element_resources (';
 		$sql .= 'element_id, element_type, resource_id, resource_type, busy, mandatory, position, relation_kind, resource_role, requirement_group,';
-		$sql .= ' users_per_service_unit, service_quantity, service_duration, capacity_used, load_volume_used, payload_weight_used, date_start, date_end, reservation_status, fk_user_create';
+		$sql .= ' users_per_service_unit, service_quantity, service_duration, capacity_used, resource_units_used, load_volume_used, payload_weight_used, date_start, date_end, reservation_status, fk_user_create';
 		$sql .= ') VALUES (';
 		$sql .= ((int) $line->rowid).", '".$this->db->escape($elementType)."', ".((int) $selected->resource_id).", 'dolresource', 1, ".(!empty($selected->mandatory) ? 1 : 0).", ".((int) $selected->position).", 'assignment', '";
 		$sql .= $this->db->escape($selected->resource_role ?: 'capacity')."', ".(!empty($selected->requirement_group) ? "'".$this->db->escape($selected->requirement_group)."'" : 'NULL').', ';
 		$sql .= price2num($selected->users_per_service_unit, 'MS').', '.price2num($serviceQuantity, 'MS').', ';
-		$sql .= (!empty($line->service_duration) ? "'".$this->db->escape($line->service_duration)."'" : 'NULL').', '.price2num($selected->capacity_used, 'MS').', ';
+		$sql .= (!empty($line->service_duration) ? "'".$this->db->escape($line->service_duration)."'" : 'NULL').', '.price2num($selected->capacity_used, 'MS').', '.max(1, (int) $selected->resource_units_used).', ';
 		$sql .= price2num(!empty($selected->load_volume_used) ? $selected->load_volume_used : 0, 'MS').', ';
 		$sql .= price2num(!empty($selected->payload_weight_used) ? $selected->payload_weight_used : 0, 'MS').', ';
 		$sql .= (!empty($selected->assignment_start) ? "'".$this->db->escape($selected->assignment_start)."'" : 'NULL').', ';
-		$sql .= (!empty($selected->assignment_end) ? "'".$this->db->escape($selected->assignment_end)."'" : 'NULL').", '".($isConfirmed ? 'confirmed' : 'provisional')."', ".((int) $user->id).')';
+		$sql .= (!empty($selected->assignment_end) ? "'".$this->db->escape($selected->assignment_end)."'" : 'NULL').", '".$this->db->escape($reservationStatus)."', ".((int) $user->id).')';
 		if (!$this->db->query($sql)) {
 			$this->errors[] = $this->db->lasterror();
 			return false;
 		}
-		return true;
+		return (int) $this->db->last_insert_id(MAIN_DB_PREFIX.'element_resources');
 	}
 }

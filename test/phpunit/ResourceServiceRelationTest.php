@@ -36,6 +36,28 @@ class ResourceServiceRelationTest extends TestCase
 	}
 
 	/**
+	 * Default groups make resources of one role ordered alternatives without
+	 * mixing independent roles.
+	 *
+	 * @return void
+	 */
+	public function testDefaultRequirementGroupUsesResourceRole(): void
+	{
+		$this->assertSame(
+			'preferred_capacity',
+			ResourceRequirementManager::getDefaultRequirementGroup('capacity')
+		);
+		$this->assertSame(
+			'preferred_equipment',
+			ResourceRequirementManager::getDefaultRequirementGroup('equipment')
+		);
+		$this->assertSame(
+			'preferred_capacity',
+			ResourceRequirementManager::getDefaultRequirementGroup('unknown')
+		);
+	}
+
+	/**
 	 * The strictest linked resource controls the service time interface.
 	 *
 	 * @return void

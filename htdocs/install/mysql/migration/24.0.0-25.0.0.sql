@@ -85,6 +85,7 @@ UPDATE llx_supplier_proposaldet SET subprice_ttc = 0 WHERE subprice_ttc <> 0 AND
 
 -- Resource characteristics and type capabilities
 ALTER TABLE llx_resource ADD COLUMN allow_overflow smallint NOT NULL DEFAULT 0;
+ALTER TABLE llx_resource ADD COLUMN available_units integer NOT NULL DEFAULT 1 AFTER max_users;
 -- VMYSQL4.1 ALTER TABLE llx_resource MODIFY COLUMN fk_statut smallint NOT NULL DEFAULT 1;
 -- VPGSQL8.2 ALTER TABLE llx_resource ALTER COLUMN fk_statut SET DEFAULT 1;
 ALTER TABLE llx_c_type_resource ADD COLUMN capacity_mode varchar(16) NOT NULL DEFAULT 'none';
@@ -129,6 +130,7 @@ ALTER TABLE llx_bookcal_calendar ADD COLUMN timezone varchar(64) NOT NULL DEFAUL
 ALTER TABLE llx_element_resources ADD COLUMN service_quantity real DEFAULT NULL;
 ALTER TABLE llx_element_resources ADD COLUMN service_duration varchar(16) DEFAULT NULL;
 ALTER TABLE llx_element_resources ADD COLUMN capacity_used real DEFAULT NULL;
+ALTER TABLE llx_element_resources ADD COLUMN resource_units_used integer DEFAULT NULL AFTER capacity_used;
 ALTER TABLE llx_element_resources ADD COLUMN load_volume_used real DEFAULT NULL;
 ALTER TABLE llx_element_resources ADD COLUMN payload_weight_used real DEFAULT NULL;
 ALTER TABLE llx_element_resources ADD COLUMN date_start datetime DEFAULT NULL;

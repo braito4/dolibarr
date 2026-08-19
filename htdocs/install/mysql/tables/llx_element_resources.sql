@@ -50,6 +50,7 @@ CREATE TABLE llx_element_resources
 	service_quantity real DEFAULT NULL,
 	service_duration varchar(16) DEFAULT NULL,
 	capacity_used real DEFAULT NULL,
+	resource_units_used integer DEFAULT NULL,
 	load_volume_used real DEFAULT NULL,
 	payload_weight_used real DEFAULT NULL,
 	date_start datetime DEFAULT NULL,
