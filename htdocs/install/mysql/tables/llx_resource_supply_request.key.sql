@@ -1,0 +1,4 @@
+ALTER TABLE llx_resource_supply_request ADD UNIQUE INDEX uk_resource_supply_request_assignment (fk_element_resource);
+ALTER TABLE llx_resource_supply_request ADD INDEX idx_resource_supply_request_resource_dates (fk_resource, date_start, date_end);
+ALTER TABLE llx_resource_supply_request ADD INDEX idx_resource_supply_request_supplier_order (fk_supplier_order, fk_supplier_order_line);
+ALTER TABLE llx_resource_supply_request ADD INDEX idx_resource_supply_request_status (request_status);

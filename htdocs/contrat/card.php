@@ -1851,6 +1851,25 @@ if ($action == 'create') {
 							if ($line->fk_product > 0 && getDolGlobalInt('PRODUIT_DESC_IN_FORM_ACCORDING_TO_DEVICE')) {
 								print (!empty($line->description) && $line->description != $line->plabel) ? (($line->date_start || $line->date_end) ? '' : '<br>').'<br>'.dol_htmlentitiesbr($line->description) : '';
 							}
+
+							if (isModEnabled('resource')) {
+								$sqlAssignments = 'SELECT er.resource_id, er.capacity_used, er.reservation_status, r.ref';
+								$sqlAssignments .= ' FROM '.MAIN_DB_PREFIX.'element_resources er';
+								$sqlAssignments .= ' INNER JOIN '.MAIN_DB_PREFIX.'resource r ON r.rowid = er.resource_id';
+								$sqlAssignments .= " WHERE er.element_type = 'contratdet' AND er.element_id = ".((int) $line->rowid);
+								$sqlAssignments .= " AND er.relation_kind = 'assignment' ORDER BY er.position, er.rowid";
+								$resAssignments = $db->query($sqlAssignments);
+								if ($resAssignments && $db->num_rows($resAssignments)) {
+									$langs->load('resource');
+									print '<div class="resource-line-assignments opacitymedium small paddingtop">'.img_picto('', 'resource', 'class="pictofixedwidth"').$langs->trans('AssignedResources').': ';
+									$assignmentLabels = array();
+									while ($assignment = $db->fetch_object($resAssignments)) {
+										$statusLabel = $assignment->reservation_status === 'confirmed' ? $langs->trans('ConfirmedReservation') : $langs->trans('ProvisionalReservation');
+										$assignmentLabels[] = '<a href="'.DOL_URL_ROOT.'/resource/card.php?id='.((int) $assignment->resource_id).'">'.dol_escape_htmltag($assignment->ref).'</a> ('.price($assignment->capacity_used).' · '.$statusLabel.')';
+									}
+									print implode(', ', $assignmentLabels).'</div>';
+								}
+							}
 						} else {
 							print img_object($langs->trans("ShowProductOrService"), ($objp->product_type ? 'service' : 'product')).' '.dol_htmlentitiesbr($objp->description)."\n";
 						}

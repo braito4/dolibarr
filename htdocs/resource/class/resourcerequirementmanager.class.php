@@ -7,7 +7,7 @@
 class ResourceRequirementManager
 {
 	/** @var DoliDB */
-	private $db;
+	protected $db;
 
 	/**
 	 * @param DoliDB $db Database handler
