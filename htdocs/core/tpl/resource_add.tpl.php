@@ -80,13 +80,13 @@ if ($element != 'product' && $element != 'service') {
 	$out .= '<div class="divsearchfield paddingtop paddingbottom valignmiddle inline-block marginleftonly"><label for="resmandatory">'.$langs->trans('Mandatory').'</label> ';
 	$out .= '<input type="checkbox" id="resmandatory" name="mandatory" value="1"'.(GETPOSTISSET('fk_resource') ? (GETPOST('mandatory') ? ' checked' : '') : ' checked').'>';
 	$out .= '</div>';
-	} else {
+} else {
 	$out .= '<div class="divsearchfield paddingtop paddingbottom valignmiddle inline-block marginleftonly"><label class="fieldrequired" for="users_per_service_unit">'.$resourceHelpLabel('UsersPerServiceUnit').'</label> ';
 	$out .= '<input type="text" class="width75 right" id="users_per_service_unit" name="users_per_service_unit" value="'.dol_escape_htmltag(GETPOST('users_per_service_unit', 'alpha')).'" required>';
 	$out .= '</div>';
 	$roleOptions = array('capacity' => $langs->trans('ResourceRoleCapacity'), 'production' => $langs->trans('ResourceRoleProduction'), 'delivery' => $langs->trans('ResourceRoleDelivery'), 'equipment' => $langs->trans('ResourceRoleEquipment'), 'operator' => $langs->trans('ResourceRoleOperator'));
 	$schedulingOptions = array('same_as_parent' => $langs->trans('SchedulingSameAsParent'), 'fixed' => $langs->trans('SchedulingFixed'), 'next_available' => $langs->trans('SchedulingNextAvailable'), 'within_window' => $langs->trans('SchedulingWithinWindow'), 'manual' => $langs->trans('SchedulingManual'));
-$startInputOptions = array('none' => $langs->trans('TimeInputNone'), 'date' => $langs->trans('TimeInputDate'), 'datetime' => $langs->trans('TimeInputDatetime'));
+	$startInputOptions = array('none' => $langs->trans('TimeInputNone'), 'date' => $langs->trans('TimeInputDate'), 'datetime' => $langs->trans('TimeInputDatetime'));
 	$endInputOptions = $startInputOptions + array('calculated' => $langs->trans('TimeInputCalculated'));
 	$precisionOptions = array('day' => $langs->trans('TimePrecisionDay'), 'hour' => $langs->trans('TimePrecisionHour'), 'minute' => $langs->trans('TimePrecisionMinute'), 'second' => $langs->trans('TimePrecisionSecond'));
 	$out .= '<div class="divsearchfield paddingtop paddingbottom valignmiddle inline-block"><label for="resource_role">'.$resourceHelpLabel('ResourceRole').'</label> '.$form->selectarray('resource_role', $roleOptions, GETPOST('resource_role', 'alpha') ?: 'capacity').'</div>';
@@ -94,7 +94,7 @@ $startInputOptions = array('none' => $langs->trans('TimeInputNone'), 'date' => $
 	$out .= '<div class="divsearchfield paddingtop paddingbottom valignmiddle inline-block"><label for="start_input_mode">'.$resourceHelpLabel('StartInputMode').'</label> '.$form->selectarray('start_input_mode', $startInputOptions, GETPOST('start_input_mode', 'alpha') ?: 'none').'</div>';
 	$out .= '<div class="divsearchfield paddingtop paddingbottom valignmiddle inline-block"><label for="end_input_mode">'.$resourceHelpLabel('EndInputMode').'</label> '.$form->selectarray('end_input_mode', $endInputOptions, GETPOST('end_input_mode', 'alpha') ?: 'none').'</div>';
 	$out .= '<div class="divsearchfield paddingtop paddingbottom valignmiddle inline-block"><label for="time_precision">'.$resourceHelpLabel('TimePrecision').'</label> '.$form->selectarray('time_precision', $precisionOptions, GETPOST('time_precision', 'alpha') ?: 'minute').'</div>';
-	$out .= '<div class="divsearchfield paddingtop paddingbottom valignmiddle inline-block"><label for="quantity_required">'.$resourceHelpLabel('ResourceQuantityRequired').'</label> <input type="text" class="width50 right" name="quantity_required" value="'.dol_escape_htmltag(GETPOST('quantity_required', 'alpha') ?: '1').'">'.'</div>';
+	$out .= '<div class="divsearchfield paddingtop paddingbottom valignmiddle inline-block"><label for="quantity_required">'.$resourceHelpLabel('ResourceQuantityRequired').'</label> <input type="text" class="width50 right" name="quantity_required" value="'.dol_escape_htmltag(GETPOST('quantity_required', 'alpha') ?: '1').'"></div>';
 	$out .= '<div class="divsearchfield paddingtop paddingbottom valignmiddle inline-block"><label for="duration_base">'.$resourceHelpLabel('DurationBaseMinutes').'</label> <input type="number" min="0" class="width50" name="duration_base" value="'.GETPOSTINT('duration_base').'"></div>';
 	$out .= '<div class="divsearchfield paddingtop paddingbottom valignmiddle inline-block"><label for="duration_per_unit">'.$resourceHelpLabel('DurationPerUnitMinutes').'</label> <input type="number" min="0" class="width50" name="duration_per_unit" value="'.GETPOSTINT('duration_per_unit').'"></div>';
 	$out .= '<div class="divsearchfield paddingtop paddingbottom valignmiddle inline-block"><label for="setup_duration">'.$resourceHelpLabel('SetupDurationMinutes').'</label> <input type="number" min="0" class="width50" name="setup_duration" value="'.GETPOSTINT('setup_duration').'"></div>';
