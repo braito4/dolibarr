@@ -667,15 +667,18 @@ class ResourceReservationManager extends ResourceRequirementManager
 		$action->fk_element = (int) $reservation['document_id'];
 		$action->elementid = (int) $reservation['document_id'];
 		$action->elementtype = (string) $reservation['document_type'];
-		$action->note_private = $langs->trans(
+		$action->note_private = $this->formatLongTranslation(
+			$langs,
 			'ResourceOutOfServiceAlertDetail',
-			$resourceRef,
-			$reservation['service_ref'],
-			$reservation['document_ref'],
-			$reservation['date_start'],
-			$reservation['date_end'],
-			!empty($reservation['supplier_name']) ? $reservation['supplier_name'] : '-',
-			$replacementRef !== '' ? $replacementRef : '-'
+			array(
+				$resourceRef,
+				$reservation['service_ref'],
+				$reservation['document_ref'],
+				$reservation['date_start'],
+				$reservation['date_end'],
+				!empty($reservation['supplier_name']) ? $reservation['supplier_name'] : '-',
+				$replacementRef !== '' ? $replacementRef : '-',
+			)
 		);
 		return $action->create($user);
 	}
@@ -706,17 +709,27 @@ class ResourceReservationManager extends ResourceRequirementManager
 		$action->userownerid = $user->id;
 		$action->elementid = (int) $reservation['document_id'];
 		$action->elementtype = (string) $reservation['document_type'];
-		$action->note_private = $langs->trans(
+		$action->note_private = $this->formatLongTranslation(
+			$langs,
 			'ResourceSupplierRevocationAlertDetail',
-			$reservation['supplier_name'],
-			$reservation['service_ref'],
-			$reservation['document_ref'],
-			$reservation['date_start'],
-			$reservation['date_end'],
-			$reason !== '' ? $reason : '-',
-			$replacementRef
+			array(
+				$reservation['supplier_name'],
+				$reservation['service_ref'],
+				$reservation['document_ref'],
+				$reservation['date_start'],
+				$reservation['date_end'],
+				$reason !== '' ? $reason : '-',
+				$replacementRef,
+			)
 		);
 		return $action->create($user);
+	}
+
+	/** Format translations that need more parameters than Translate::trans supports. */
+	private function formatLongTranslation(Translate $langs, $key, array $parameters)
+	{
+		$format = !empty($langs->tab_translate[$key]) ? $langs->tab_translate[$key] : $key;
+		return vsprintf($format, $parameters);
 	}
 
 	/**

@@ -561,8 +561,12 @@ class ResourceReservationTest extends TestCase
 		$this->assertCount(1, $impact);
 		$this->assertSame($this->thirdPartyId, (int) $impact[0]['supplier_id']);
 		$this->assertSame(1, $manager->applyOutOfService($this->firstResourceId, $impact, $user));
+		$this->assertSame(1, $supplyManager->handleResourceOutOfService($this->firstResourceId, $user));
 		$this->assertSame(ResourceSupplyRequestManager::STATUS_UNAVAILABLE, $this->fetchSupplyRequestForLine($context['line_id'])->request_status);
 		$this->assertSame(ResourceReservationManager::STATUS_UNAVAILABLE, $this->fetchReservation('propaldet', $context['line_id'])->reservation_status);
+		$updatedRequest = $this->fetchSupplyRequestForLine($context['line_id']);
+		$sql = 'SELECT active FROM '.MAIN_DB_PREFIX.'resource_time_slot WHERE rowid='.((int) $updatedRequest->fk_availability_slot);
+		$this->assertSame(0, (int) $this->db->fetch_object($this->db->query($sql))->active);
 
 		$alert = $this->fetchLastOutOfServiceAlert();
 		$this->assertNotNull($alert);
@@ -786,6 +790,91 @@ class ResourceReservationTest extends TestCase
 		$sql = 'SELECT request_status FROM '.MAIN_DB_PREFIX.'resource_supply_request WHERE rowid='.((int) $request->rowid);
 		$this->assertSame(ResourceSupplyRequestManager::STATUS_RELEASED, $this->db->fetch_object($this->db->query($sql))->request_status);
 		$this->assertSame(ResourceReservationManager::STATUS_CANCELED, $this->fetchReservation('propaldet', $lineId)->reservation_status);
+	}
+
+	/** The core creates the assignment; only the external post-trigger owns awaiting state and requests. */
+	public function testAwaitingSupplyIsAppliedOnlyByExternalPostTrigger(): void
+	{
+		global $user, $langs, $conf;
+		$sql = 'UPDATE '.MAIN_DB_PREFIX.'resource SET fk_statut='.Dolresource::STATUS_UNKNOWN;
+		$sql .= ' WHERE rowid='.((int) $this->firstResourceId);
+		$this->assertTrue((bool) $this->db->query($sql));
+		$lineId = $this->createProposalLine(1.0, '2027-07-01 15:00:00', '2027-07-02 11:00:00');
+		$sql = 'SELECT fk_propal FROM '.MAIN_DB_PREFIX.'propaldet WHERE rowid='.((int) $lineId);
+		$proposalId = (int) $this->db->fetch_object($this->db->query($sql))->fk_propal;
+		$object = new stdClass();
+		$object->id = $proposalId;
+
+		$this->assertSame(1, $this->trigger->runTrigger('PROPAL_VALIDATE', $object, $user, $langs, $conf));
+		$this->assertSame(ResourceReservationManager::STATUS_PROVISIONAL, $this->fetchReservation('propaldet', $lineId)->reservation_status);
+		$this->assertNull($this->fetchSupplyRequestForLine($lineId));
+
+		$this->assertSame(1, $this->unknownRequestTrigger->runTrigger('PROPAL_VALIDATE', $object, $user, $langs, $conf));
+		$this->assertSame(ResourceReservationManager::STATUS_AWAITING_SUPPLY, $this->fetchReservation('propaldet', $lineId)->reservation_status);
+		$this->assertNotNull($this->fetchSupplyRequestForLine($lineId));
+	}
+
+	/** Replaying the post-trigger neither duplicates a request nor regresses a confirmed assignment. */
+	public function testExternalPostTriggerIsIdempotentAfterConfirmation(): void
+	{
+		global $user, $langs, $conf;
+		$context = $this->createValidatedUnknownProposal(1.0, '2027-07-03 15:00:00', '2027-07-04 11:00:00');
+		$request = $this->fetchSupplyRequestForLine($context['line_id']);
+		$object = new stdClass();
+		$object->id = $context['proposal_id'];
+
+		$this->assertSame(1, $this->unknownRequestTrigger->runTrigger('PROPAL_VALIDATE', $object, $user, $langs, $conf));
+		$this->assertSame(1, $this->countSupplyRequestsForLine($context['line_id']));
+		$manager = new ResourceSupplyRequestManager($this->db);
+		$this->assertSame(1, $manager->confirm((int) $request->rowid, array(
+			'quantity_confirmed' => 1,
+			'date_start' => '2027-07-03 15:00:00',
+			'date_end' => '2027-07-04 11:00:00',
+		), $user));
+
+		$this->assertSame(1, $this->unknownRequestTrigger->runTrigger('PROPAL_VALIDATE', $object, $user, $langs, $conf));
+		$this->assertSame(1, $this->countSupplyRequestsForLine($context['line_id']));
+		$this->assertSame(ResourceReservationManager::STATUS_CONFIRMED, $this->fetchReservation('propaldet', $context['line_id'])->reservation_status);
+	}
+
+	/** The external post-trigger leaves normal owner-calendar resources untouched. */
+	public function testExternalPostTriggerIgnoresKnownResource(): void
+	{
+		$lineId = $this->createProposalLine(1.0, '2027-07-05 15:00:00', '2027-07-06 11:00:00');
+		$sql = 'SELECT fk_propal FROM '.MAIN_DB_PREFIX.'propaldet WHERE rowid='.((int) $lineId);
+		$proposalId = (int) $this->db->fetch_object($this->db->query($sql))->fk_propal;
+
+		$this->assertSame(1, $this->runObjectTrigger('PROPAL_VALIDATE', $proposalId));
+		$this->assertSame(ResourceReservationManager::STATUS_PROVISIONAL, $this->fetchReservation('propaldet', $lineId)->reservation_status);
+		$this->assertNull($this->fetchSupplyRequestForLine($lineId));
+	}
+
+	/** Unsupported document types cannot create external availability requests. */
+	public function testExternalManagerRejectsUnsupportedDocumentType(): void
+	{
+		global $user;
+		$manager = new ResourceExternalAvailabilityManager($this->db);
+		$this->assertSame(-1, $manager->createMissingRequestsForDocument('commandedet', 12345, $user));
+	}
+
+	/** External out-of-service handling invalidates the request and its confirmed calendar slot. */
+	public function testExternalOutOfServiceInvalidatesRequestAndCalendarSlot(): void
+	{
+		global $user;
+		$context = $this->createValidatedUnknownProposal(1.0, '2027-07-07 15:00:00', '2027-07-08 11:00:00');
+		$request = $this->fetchSupplyRequestForLine($context['line_id']);
+		$manager = new ResourceExternalAvailabilityManager($this->db);
+		$this->assertSame(1, $manager->confirm((int) $request->rowid, array(
+			'quantity_confirmed' => 1,
+			'date_start' => '2027-07-07 15:00:00',
+			'date_end' => '2027-07-08 11:00:00',
+		), $user));
+		$request = $this->fetchSupplyRequestForLine($context['line_id']);
+
+		$this->assertSame(1, $manager->handleResourceOutOfService($this->firstResourceId, $user));
+		$this->assertSame(ResourceSupplyRequestManager::STATUS_UNAVAILABLE, $this->fetchSupplyRequestForLine($context['line_id'])->request_status);
+		$sql = 'SELECT active FROM '.MAIN_DB_PREFIX.'resource_time_slot WHERE rowid='.((int) $request->fk_availability_slot);
+		$this->assertSame(0, (int) $this->db->fetch_object($this->db->query($sql))->active);
 	}
 
 	/**
@@ -1758,6 +1847,15 @@ class ResourceReservationTest extends TestCase
 		$sql .= ' ORDER BY sr.rowid DESC'.$this->db->plimit(1);
 		$resql = $this->db->query($sql);
 		return $resql ? ($this->db->fetch_object($resql) ?: null) : null;
+	}
+
+	/** Count requests associated with one proposal line. */
+	private function countSupplyRequestsForLine($lineId)
+	{
+		$sql = 'SELECT COUNT(*) as nb FROM '.MAIN_DB_PREFIX.'resource_supply_request sr';
+		$sql .= ' INNER JOIN '.MAIN_DB_PREFIX.'element_resources er ON er.rowid=sr.fk_element_resource';
+		$sql .= " WHERE er.element_type='propaldet' AND er.element_id=".((int) $lineId);
+		return (int) $this->db->fetch_object($this->db->query($sql))->nb;
 	}
 
 	/**
