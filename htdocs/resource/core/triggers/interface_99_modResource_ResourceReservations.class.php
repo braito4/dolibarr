@@ -214,7 +214,26 @@ class InterfaceResourceReservations extends DolibarrTriggers
 		$sql .= $unknownAvailabilityEnabled ? ' AND r.fk_statut IN (0, 1)' : ' AND r.fk_statut = 1';
 		$sql .= ' ORDER BY er.requirement_group, er.position, er.rowid';
 		$resql = $this->db->query($sql);
-		if (!$resql || !$this->db->num_rows($resql)) {
+		if (!$resql) {
+			$this->errors[] = $this->db->lasterror();
+			return -1;
+		}
+		if (!$this->db->num_rows($resql)) {
+			$sql = 'SELECT COUNT(*) as mandatory_count FROM '.MAIN_DB_PREFIX.'element_resources';
+			$sql .= " WHERE element_type='product' AND element_id=".((int) $line->fk_product);
+			$sql .= " AND resource_type='dolresource'";
+			$sql .= " AND (relation_kind IS NULL OR relation_kind='requirement') AND mandatory=1";
+			$mandatoryResult = $this->db->query($sql);
+			$mandatoryRequirements = $mandatoryResult ? $this->db->fetch_object($mandatoryResult) : null;
+			if (!$mandatoryResult) {
+				$this->errors[] = $this->db->lasterror();
+				return -1;
+			}
+			if ($mandatoryRequirements && (int) $mandatoryRequirements->mandatory_count > 0) {
+				$langs->load('resource');
+				$this->errors[] = $langs->trans('NoResourceAvailableForServiceLine');
+				return -1;
+			}
 			return 1;
 		}
 

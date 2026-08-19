@@ -266,6 +266,20 @@ class ResourceReservationTest extends TestCase
 		$this->assertSame($this->secondResourceId, (int) $this->fetchReservation('contratdet', $lineId)->resource_id);
 	}
 
+	/** Proposal validation fails when every mandatory candidate is out of service. */
+	public function testProposalFailsWhenAllMandatoryResourcesAreOutOfService(): void
+	{
+		$sql = 'UPDATE '.MAIN_DB_PREFIX.'resource SET fk_statut='.Dolresource::STATUS_OUT_OF_SERVICE;
+		$sql .= ' WHERE rowid IN ('.((int) $this->firstResourceId).', '.((int) $this->secondResourceId).')';
+		$this->assertTrue((bool) $this->db->query($sql));
+		$lineId = $this->createProposalLine(1.0, '2027-08-01 15:00:00', '2027-08-02 11:00:00');
+		$sql = 'SELECT fk_propal FROM '.MAIN_DB_PREFIX.'propaldet WHERE rowid='.((int) $lineId);
+		$proposalId = (int) $this->db->fetch_object($this->db->query($sql))->fk_propal;
+
+		$this->assertSame(-1, $this->runObjectTrigger('PROPAL_VALIDATE', $proposalId));
+		$this->assertNull($this->fetchReservation('propaldet', $lineId));
+	}
+
 	/**
 	 * Busy is calculated from confirmed overlapping capacity, not stored as a manual status.
 	 *
