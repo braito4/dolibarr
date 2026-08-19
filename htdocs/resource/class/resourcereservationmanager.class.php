@@ -674,7 +674,14 @@ class ResourceReservationManager extends ResourceRequirementManager
 		return $action->create($user);
 	}
 
-	/** Format translations that need more parameters than Translate::trans supports. */
+	/**
+	 * Format translations that need more parameters than Translate::trans supports.
+	 *
+	 * @param Translate           $langs      Translation handler
+	 * @param string              $key        Translation key
+	 * @param array<int,mixed>    $parameters Replacement parameters
+	 * @return string
+	 */
 	private function formatLongTranslation(Translate $langs, $key, array $parameters)
 	{
 		$format = !empty($langs->tab_translate[$key]) ? $langs->tab_translate[$key] : $key;

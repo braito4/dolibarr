@@ -266,7 +266,11 @@ class ResourceReservationTest extends TestCase
 		$this->assertSame($this->secondResourceId, (int) $this->fetchReservation('contratdet', $lineId)->resource_id);
 	}
 
-	/** Proposal validation fails when every mandatory candidate is out of service. */
+	/**
+	 * Proposal validation fails when every mandatory candidate is out of service.
+	 *
+	 * @return void
+	 */
 	public function testProposalFailsWhenAllMandatoryResourcesAreOutOfService(): void
 	{
 		$sql = 'UPDATE '.MAIN_DB_PREFIX.'resource SET fk_statut='.Dolresource::STATUS_OUT_OF_SERVICE;
@@ -776,7 +780,11 @@ class ResourceReservationTest extends TestCase
 		$this->assertSame('2026-08-20 09:00', $provider->formatLocalTimestamp($calendarId, $slotStart));
 	}
 
-	/** BookCal skips the nonexistent hour when the resource calendar enters daylight saving time. */
+	/**
+	 * BookCal skips the nonexistent hour when the resource calendar enters daylight saving time.
+	 *
+	 * @return void
+	 */
 	public function testBookCalSkipsNonexistentSpringClockHour(): void
 	{
 		global $user;
@@ -810,7 +818,11 @@ class ResourceReservationTest extends TestCase
 		$this->assertSame(0, $provider->getLocalTimestamp($calendarId, $dayStart, '02:00'));
 	}
 
-	/** BookCal hides a repeated local hour because the form cannot carry its UTC offset. */
+	/**
+	 * BookCal hides a repeated local hour because the form cannot carry its UTC offset.
+	 *
+	 * @return void
+	 */
 	public function testBookCalHandlesRepeatedAutumnClockHour(): void
 	{
 		global $user;
