@@ -36,19 +36,27 @@ class BookCalAvailabilityProvider
 	public function getSlots($calendarId, $dayStart)
 	{
 		$slots = array();
+		$dayParts = dol_getdate($dayStart);
+		$localDayStart = dol_mktime(0, 0, 0, $dayParts['mon'], $dayParts['mday'], $dayParts['year'], 'tzuserrel');
+		$dayKey = sprintf('%04d-%02d-%02d', $dayParts['year'], $dayParts['mon'], $dayParts['mday']);
 		$sql = 'SELECT ba.duration, ba.startHour, ba.endHour, ba.start, ba.end';
 		$sql .= ' FROM '.MAIN_DB_PREFIX.'bookcal_availabilities ba';
 		$sql .= ' INNER JOIN '.MAIN_DB_PREFIX.'bookcal_calendar bc ON bc.rowid = ba.fk_bookcal_calendar';
 		$sql .= ' WHERE ba.fk_bookcal_calendar = '.((int) $calendarId).' AND ba.status = 1 AND bc.status = 1';
 		$resql = $this->db->query($sql);
 		while ($resql && ($range = $this->db->fetch_object($resql))) {
-			$rangeStart = $this->db->jdate($range->start);
-			$rangeEnd = $this->db->jdate($range->end) + 86400;
-			if ($dayStart < $rangeStart || $dayStart >= $rangeEnd || (int) $range->duration <= 0) {
+			$rangeStart = substr((string) $range->start, 0, 10);
+			$rangeEnd = substr((string) $range->end, 0, 10);
+			if ($dayKey < $rangeStart || $dayKey > $rangeEnd || (int) $range->duration <= 0) {
 				continue;
 			}
-			$cursor = $dayStart + (max(0, (int) $range->startHour) * 3600);
-			$limit = $dayStart + (min(24, (int) $range->endHour) * 3600);
+			$startHour = max(0, min(24, (int) $range->startHour));
+			$endHour = max(0, min(24, (int) $range->endHour));
+			$cursor = $localDayStart + ($startHour * 3600);
+			$limit = $localDayStart + ($endHour * 3600);
+			if ($endHour <= $startHour) {
+				$limit += 86400;
+			}
 			$duration = (int) $range->duration;
 			while ($cursor + ($duration * 60) <= $limit) {
 				$key = dol_print_date($cursor, '%H:%M', 'tzuserrel');
@@ -82,13 +90,19 @@ class BookCalAvailabilityProvider
 		$resql = $this->db->query($sql);
 		$dateParts = dol_getdate($dateStart);
 		$dayStart = dol_mktime(0, 0, 0, $dateParts['mon'], $dateParts['mday'], $dateParts['year'], 'tzuserrel');
+		$dayKey = sprintf('%04d-%02d-%02d', $dateParts['year'], $dateParts['mon'], $dateParts['mday']);
 		while ($resql && ($range = $this->db->fetch_object($resql))) {
-			$rangeStart = $this->db->jdate($range->start);
-			$rangeEnd = $this->db->jdate($range->end) + 86400;
-			$opening = $dayStart + (max(0, (int) $range->startHour) * 3600);
-			$closing = $dayStart + (min(24, (int) $range->endHour) * 3600);
+			$rangeStart = substr((string) $range->start, 0, 10);
+			$rangeEnd = substr((string) $range->end, 0, 10);
+			$startHour = max(0, min(24, (int) $range->startHour));
+			$endHour = max(0, min(24, (int) $range->endHour));
+			$opening = $dayStart + ($startHour * 3600);
+			$closing = $dayStart + ($endHour * 3600);
+			if ($endHour <= $startHour) {
+				$closing += 86400;
+			}
 			$duration = (int) round(($dateEnd - $dateStart) / 60);
-			if ($dayStart >= $rangeStart && $dayStart < $rangeEnd && $dateStart >= $opening && $dateEnd <= $closing && $duration === (int) $range->duration) {
+			if ($dayKey >= $rangeStart && $dayKey <= $rangeEnd && $dateStart >= $opening && $dateEnd <= $closing && $duration === (int) $range->duration) {
 				$insideOpeningRange = true;
 				break;
 			}

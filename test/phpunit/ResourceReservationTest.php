@@ -17,6 +17,7 @@ require_once $documentRoot.'/master.inc.php';
 require_once $documentRoot.'/resource/class/dolresource.class.php';
 require_once $documentRoot.'/resource/class/resourcereservationmanager.class.php';
 require_once $documentRoot.'/resource/core/triggers/interface_99_modResource_ResourceReservations.class.php';
+require_once $documentRoot.'/bookcal/class/bookcalavailabilityprovider.class.php';
 
 if (empty($user->id)) {
 	$user->fetch(1);
@@ -620,6 +621,88 @@ class ResourceReservationTest extends TestCase
 		$this->assertGreaterThan(0, $weeklyId);
 		$sql = 'SELECT COUNT(*) as nb FROM '.MAIN_DB_PREFIX.'resource_time_slot WHERE rowid IN ('.((int) $absoluteId).','.((int) $weeklyId).')';
 		$this->assertSame(2, (int) $this->db->fetch_object($this->db->query($sql))->nb);
+	}
+
+	/**
+	 * BookCal slot labels remain aligned with configured local opening hours.
+	 *
+	 * @return void
+	 */
+	public function testBookCalSlotsRespectVisitorTimezone(): void
+	{
+		global $user;
+		$calendarId = $this->insert('bookcal_calendar', array(
+			'entity' => 1,
+			'ref' => 'PHPUNIT-BOOKCAL',
+			'label' => 'PHPUnit BookCal',
+			'date_creation' => '2026-08-19 10:00:00',
+			'fk_user_creat' => $user->id,
+			'status' => 1,
+			'type' => 3,
+			'visibility' => 1,
+		));
+		$this->insert('bookcal_availabilities', array(
+			'label' => 'PHPUnit range',
+			'date_creation' => '2026-08-19 10:00:00',
+			'fk_user_creat' => $user->id,
+			'status' => 1,
+			'start' => '2026-08-20',
+			'end' => '2026-08-20',
+			'duration' => 60,
+			'startHour' => 9,
+			'endHour' => 11,
+			'fk_bookcal_calendar' => $calendarId,
+		));
+		$previousTimezone = isset($_SESSION['dol_tz_string']) ? $_SESSION['dol_tz_string'] : null;
+		$_SESSION['dol_tz_string'] = 'Europe/Madrid';
+		$slots = (new BookCalAvailabilityProvider($this->db))->getSlots($calendarId, gmmktime(0, 0, 0, 8, 20, 2026));
+		if ($previousTimezone === null) {
+			unset($_SESSION['dol_tz_string']);
+		} else {
+			$_SESSION['dol_tz_string'] = $previousTimezone;
+		}
+
+		$this->assertSame(array('09:00', '10:00'), array_keys($slots));
+		$this->assertSame(array(60, 60), array_values($slots));
+	}
+
+	/**
+	 * An end hour equal to or before the start hour denotes the following day.
+	 *
+	 * @return void
+	 */
+	public function testBookCalSupportsOvernightSlots(): void
+	{
+		global $user;
+		$calendarId = $this->insert('bookcal_calendar', array(
+			'entity' => 1,
+			'ref' => 'PHPUNIT-BOOKCAL-OVERNIGHT',
+			'label' => 'PHPUnit overnight BookCal',
+			'date_creation' => '2026-08-19 10:00:00',
+			'fk_user_creat' => $user->id,
+			'status' => 1,
+			'type' => 3,
+			'visibility' => 1,
+		));
+		$this->insert('bookcal_availabilities', array(
+			'label' => 'Hotel night',
+			'date_creation' => '2026-08-19 10:00:00',
+			'fk_user_creat' => $user->id,
+			'status' => 1,
+			'start' => '2026-08-20',
+			'end' => '2026-08-20',
+			'duration' => 1439,
+			'startHour' => 12,
+			'endHour' => 12,
+			'fk_bookcal_calendar' => $calendarId,
+		));
+		$dayStart = gmmktime(0, 0, 0, 8, 20, 2026);
+		$provider = new BookCalAvailabilityProvider($this->db);
+		$slots = $provider->getSlots($calendarId, $dayStart);
+		$slotStart = dol_mktime(12, 0, 0, 8, 20, 2026, 'tzuserrel');
+
+		$this->assertSame(array('12:00' => 1439), $slots);
+		$this->assertTrue($provider->isAvailable($calendarId, $slotStart, $slotStart + (1439 * 60)));
 	}
 
 	/** @return int */

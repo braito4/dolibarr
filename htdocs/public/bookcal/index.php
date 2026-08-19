@@ -46,6 +46,7 @@ require_once DOL_DOCUMENT_ROOT.'/core/lib/date.lib.php';
 require_once DOL_DOCUMENT_ROOT.'/core/lib/functions2.lib.php';
 require_once DOL_DOCUMENT_ROOT.'/bookcal/class/calendar.class.php';
 require_once DOL_DOCUMENT_ROOT.'/bookcal/class/availabilities.class.php';
+require_once DOL_DOCUMENT_ROOT.'/bookcal/class/bookcalavailabilityprovider.class.php';
 require_once DOL_DOCUMENT_ROOT.'/contact/class/contact.class.php';
 require_once DOL_DOCUMENT_ROOT.'/comm/action/class/actioncomm.class.php';
 require_once DOL_DOCUMENT_ROOT.'/core/lib/public.lib.php';
@@ -173,6 +174,12 @@ if ($action == 'add') {	// Test on permission not required here (anonymous actio
 	}
 
 	$db->begin();
+	$dateend = dol_time_plus_duree(GETPOSTINT('datetimebooking'), GETPOSTINT('durationbooking'), 'i');
+	$availabilityProvider = new BookCalAvailabilityProvider($db);
+	if (!$availabilityProvider->isAvailable($id, GETPOSTINT('datetimebooking'), $dateend)) {
+		$error++;
+		$errmsg .= $langs->trans('BookCalSlotNoLongerAvailable')."<br>\n";
+	}
 
 	if (!GETPOST("lastname")) {
 		$error++;
@@ -225,8 +232,6 @@ if ($action == 'add') {	// Test on permission not required here (anonymous actio
 	}
 
 	if (!$error) {
-		$dateend = dol_time_plus_duree(GETPOSTINT("datetimebooking"), GETPOSTINT("durationbooking"), 'i');
-
 		$actioncomm->label = $langs->trans("BookcalBookingTitle");
 		$actioncomm->type = 'AC_RDV';
 		$actioncomm->type_id = 5;
@@ -255,6 +260,26 @@ if ($action == 'add') {	// Test on permission not required here (anonymous actio
 				$error++;
 				$errmsg .= $actioncomm->error." ".implode(',', $actioncomm->errors);
 			}
+		}
+	}
+
+	if (!$error) {
+		$reservationManager = new ResourceReservationManager($db);
+		$assignmentId = $reservationManager->createAssignment(array(
+			'element_type' => 'action',
+			'element_id' => $actioncomm->id,
+			'resource_type' => 'bookcal_calendar',
+			'resource_id' => $id,
+			'resource_role' => 'capacity',
+			'capacity_used' => 1,
+			'maximum_capacity' => 1,
+			'date_start' => $db->idate(GETPOSTINT('datetimebooking')),
+			'date_end' => $db->idate($dateend),
+			'reservation_status' => ResourceReservationManager::STATUS_CONFIRMED,
+		), $user);
+		if ($assignmentId < 0) {
+			$error++;
+			$errmsg .= $langs->trans('BookCalSlotNoLongerAvailable')."<br>\n";
 		}
 	}
 
@@ -541,6 +566,9 @@ if ($action == 'afteradd') {
 			let mins = hour.getMinutes().toString().padStart(2, "0"); // Formatter pour obtenir deux chiffres
 
 			timerange = index + " - " + `${hours}:${mins}`;
+			if (hour.getDate() > 1) {
+				timerange += " (+1 day)";
+			}
 			str += \'<input class="button btnsubmitbooking \'+(isalreadybooked == true ? "btnbookcalbooked" : "")+\'" type="submit" name="timebooking" value="\'+timerange+\'" data-duration="\'+duration+\'"><br>\';
 		}
 
