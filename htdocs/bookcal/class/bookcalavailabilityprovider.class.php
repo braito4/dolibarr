@@ -27,6 +27,51 @@ class BookCalAvailabilityProvider
 	}
 
 	/**
+	 * Return sellable services explicitly linked to a BookCal calendar.
+	 *
+	 * @param int $calendarId BookCal calendar id
+	 * @return array<int,array<string,mixed>> Services indexed by product id
+	 */
+	public function getServices($calendarId)
+	{
+		$services = array();
+		$sql = 'SELECT DISTINCT p.rowid, p.ref, p.label, p.description, p.price, p.tva_tx';
+		$sql .= ' FROM '.MAIN_DB_PREFIX.'element_resources er';
+		$sql .= ' INNER JOIN '.MAIN_DB_PREFIX.'product p ON p.rowid = er.element_id';
+		$sql .= " WHERE er.element_type = 'product'";
+		$sql .= " AND er.resource_type = 'bookcal_calendar'";
+		$sql .= ' AND er.resource_id = '.((int) $calendarId);
+		$sql .= " AND (er.relation_kind = 'requirement' OR er.relation_kind IS NULL)";
+		$sql .= ' AND p.fk_product_type = 1 AND p.tosell = 1';
+		$sql .= ' ORDER BY p.ref, p.label';
+		$resql = $this->db->query($sql);
+		while ($resql && ($service = $this->db->fetch_object($resql))) {
+			$services[(int) $service->rowid] = array(
+				'id' => (int) $service->rowid,
+				'ref' => (string) $service->ref,
+				'label' => (string) $service->label,
+				'description' => (string) $service->description,
+				'price' => (float) $service->price,
+				'tva_tx' => (float) $service->tva_tx,
+			);
+		}
+		return $services;
+	}
+
+	/**
+	 * Check that a service can be bought for this calendar.
+	 *
+	 * @param int $calendarId BookCal calendar id
+	 * @param int $serviceId  Service product id
+	 * @return bool
+	 */
+	public function isServiceLinked($calendarId, $serviceId)
+	{
+		$services = $this->getServices($calendarId);
+		return isset($services[(int) $serviceId]);
+	}
+
+	/**
 	 * Return the slots for one local calendar day.
 	 *
 	 * @param int $calendarId BookCal calendar id

@@ -126,7 +126,11 @@ $isdatechosen = false;
 $timebooking = GETPOST("timebooking");
 $datetimebooking = GETPOSTINT("datetimebooking");
 $durationbooking = GETPOSTINT("durationbooking");
+$serviceId = GETPOSTINT('service_id');
 $errmsg = '';
+
+$availabilityProvider = new BookCalAvailabilityProvider($db);
+$bookableServices = $availabilityProvider->getServices($id);
 
 /**
  * Show header for booking
@@ -175,10 +179,13 @@ if ($action == 'add') {	// Test on permission not required here (anonymous actio
 
 	$db->begin();
 	$dateend = dol_time_plus_duree(GETPOSTINT('datetimebooking'), GETPOSTINT('durationbooking'), 'i');
-	$availabilityProvider = new BookCalAvailabilityProvider($db);
 	if (!$availabilityProvider->isAvailable($id, GETPOSTINT('datetimebooking'), $dateend)) {
 		$error++;
 		$errmsg .= $langs->trans('BookCalSlotNoLongerAvailable')."<br>\n";
+	}
+	if (!empty($bookableServices) && ($serviceId <= 0 || !isset($bookableServices[$serviceId]))) {
+		$error++;
+		$errmsg .= $langs->trans('ErrorFieldRequired', $langs->transnoentitiesnoconv('Service'))."<br>\n";
 	}
 
 	if (!GETPOST("lastname")) {
@@ -233,6 +240,11 @@ if ($action == 'add') {	// Test on permission not required here (anonymous actio
 
 	if (!$error) {
 		$actioncomm->label = $langs->trans("BookcalBookingTitle");
+		if ($serviceId > 0 && isset($bookableServices[$serviceId])) {
+			$actioncomm->label = $bookableServices[$serviceId]['ref'].' - '.$bookableServices[$serviceId]['label'];
+			$actioncomm->fk_element = $serviceId;
+			$actioncomm->elementtype = 'product';
+		}
 		$actioncomm->type = 'AC_RDV';
 		$actioncomm->type_id = 5;
 		$actioncomm->datep = GETPOSTINT("datetimebooking");
@@ -332,7 +344,6 @@ if ($action == 'afteradd') {
 	print '<h2>';
 	print $langs->trans("BookingSuccessfullyBooked");
 	print '</h2>';
-	$availabilityProvider = new BookCalAvailabilityProvider($db);
 	print $langs->trans("BookingReservationHourAfter", $availabilityProvider->formatLocalTimestamp($id, GETPOSTINT('datetimebooking')));
 } else {
 	$param = '';
@@ -372,12 +383,10 @@ if ($action == 'afteradd') {
 			$timebookingarray = explode(" - ", $timebooking);
 			$timestartarray = explode(":", $timebookingarray[0]);
 			$timeendarray = explode(":", $timebookingarray[1]);
-			$availabilityProvider = new BookCalAvailabilityProvider($db);
 			$datetimebooking = $availabilityProvider->getLocalTimestamp($id, $datetimechosen, sprintf('%02d:%02d', (int) $timestartarray[0], (int) $timestartarray[1]));
 		}
-		$availabilityProvider = new BookCalAvailabilityProvider($db);
 		print '<span>'.img_picto("", "calendar").' '.$availabilityProvider->formatLocalTimestamp($id, $datetimebooking).'</span>';
-		print '<div class="center"><a href="'.$_SERVER["PHP_SELF"].'?id=1&year=2024&month=2" class="small">('.$langs->trans("SelectANewDate").')</a></div>';
+		print '<div class="center"><a href="'.dol_escape_htmltag($_SERVER["PHP_SELF"]).'?id='.$id.'&year='.$year.'&month='.$month.'" class="small">('.$langs->trans("SelectANewDate").')</a></div>';
 		print '</td>';
 
 		print '<td>';
@@ -389,6 +398,17 @@ if ($action == 'afteradd') {
 		print '<input type="hidden" name="datechosen" value="'.$datechosen.'">';
 		print '<input type="hidden" name="id" value="'.$id.'">';
 		print '<input type="hidden" name="durationbooking" value="'.$durationbooking.'">';
+
+		if (!empty($bookableServices)) {
+			print '<tr><td><label for="service_id">'.$langs->trans('Service').'*'.'</label><br>';
+			print '<select name="service_id" id="service_id" class="minwidth200" required>';
+			print '<option value="">'.$langs->trans('Select').'</option>';
+			foreach ($bookableServices as $bookableService) {
+				$selected = $serviceId === $bookableService['id'] ? ' selected' : '';
+				print '<option value="'.$bookableService['id'].'"'.$selected.'>'.dol_escape_htmltag($bookableService['ref'].' - '.$bookableService['label']).'</option>';
+			}
+			print '</select></td></tr>';
+		}
 
 		// Lastname
 		print '<tr><td><input autofocus type="text" name="lastname" class="minwidth150" placeholder="'.dol_escape_htmltag($langs->trans("Lastname").'*').'" value="'.dol_escape_htmltag(GETPOST('lastname')).'"></td></tr>'."\n";

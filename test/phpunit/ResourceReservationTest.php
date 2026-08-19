@@ -86,6 +86,7 @@ class ResourceReservationTest extends TestCase
 			'ref' => 'PHPUNIT_RESOURCE_SERVICE',
 			'label' => 'PHPUnit resource service',
 			'fk_product_type' => 1,
+			'tosell' => 1,
 			'duration' => '1d',
 			'entity' => 1,
 		));
@@ -711,6 +712,41 @@ class ResourceReservationTest extends TestCase
 
 		$this->assertSame(array('12:00' => 1439), $slots);
 		$this->assertTrue($provider->isAvailable($calendarId, $slotStart, $slotStart + (1439 * 60)));
+	}
+
+	/**
+	 * BookCal only offers sellable services linked to the selected calendar.
+	 *
+	 * @return void
+	 */
+	public function testBookCalListsLinkedServices(): void
+	{
+		global $user;
+		$calendarId = $this->insert('bookcal_calendar', array(
+			'entity' => 1,
+			'ref' => 'PHPUNIT-BOOKCAL-SERVICES',
+			'label' => 'PHPUnit BookCal services',
+			'timezone' => 'Europe/Madrid',
+			'date_creation' => '2026-08-19 10:00:00',
+			'fk_user_creat' => $user->id,
+			'status' => 1,
+			'type' => 3,
+			'visibility' => 1,
+		));
+		$this->insert('element_resources', array(
+			'element_id' => $this->serviceId,
+			'element_type' => 'product',
+			'resource_id' => $calendarId,
+			'resource_type' => 'bookcal_calendar',
+			'relation_kind' => 'requirement',
+		));
+		$provider = new BookCalAvailabilityProvider($this->db);
+		$services = $provider->getServices($calendarId);
+
+		$this->assertArrayHasKey($this->serviceId, $services);
+		$this->assertSame('PHPUNIT_RESOURCE_SERVICE', $services[$this->serviceId]['ref']);
+		$this->assertTrue($provider->isServiceLinked($calendarId, $this->serviceId));
+		$this->assertFalse($provider->isServiceLinked($calendarId, $this->serviceId + 9999));
 	}
 
 	/**
