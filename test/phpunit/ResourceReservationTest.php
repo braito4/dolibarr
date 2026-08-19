@@ -125,6 +125,29 @@ class ResourceReservationTest extends TestCase
 	}
 
 	/**
+	 * Proposal validation checks confirmed capacity but never turns its hold
+	 * into a confirmed reservation.
+	 *
+	 * @return void
+	 */
+	public function testProposalValidationRechecksCapacityAndRemainsProvisional(): void
+	{
+		$lineId = $this->createProposalLine(1.0, '2026-10-10 08:00:00', '2026-10-11 08:00:00');
+		$this->assertSame(1, $this->runLineTrigger('LINEPROPAL_INSERT', $lineId));
+		$sql = 'SELECT fk_propal FROM '.MAIN_DB_PREFIX.'propaldet WHERE rowid = '.((int) $lineId);
+		$proposalId = (int) $this->db->fetch_object($this->db->query($sql))->fk_propal;
+
+		$this->assertSame(1, $this->runObjectTrigger('PROPAL_VALIDATE', $proposalId));
+		$this->assertSame('provisional', $this->fetchReservation('propaldet', $lineId)->reservation_status);
+
+		$this->insertReservation($this->firstResourceId, 'contratdet', 999011, 6.0, 'confirmed');
+		$this->insertReservation($this->secondResourceId, 'contratdet', 999012, 2.0, 'confirmed');
+		$this->assertSame(-1, $this->runObjectTrigger('PROPAL_VALIDATE', $proposalId));
+		$this->assertNull($this->fetchReservation('propaldet', $lineId));
+		$this->assertNotEmpty($this->trigger->errors);
+	}
+
+	/**
 	 * Provisional proposal capacity must not block a confirmed contract.
 	 *
 	 * @return void

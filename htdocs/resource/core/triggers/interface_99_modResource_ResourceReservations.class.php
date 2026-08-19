@@ -48,6 +48,9 @@ class InterfaceResourceReservations extends DolibarrTriggers
 		if ($action === 'CONTRACT_VALIDATE') {
 			return $this->synchronizeContractReservations((int) $object->id, $user, $langs);
 		}
+		if ($action === 'PROPAL_VALIDATE') {
+			return $this->synchronizeProposalReservations((int) $object->id, $user, $langs);
+		}
 
 		$isProposal = strpos($action, 'LINEPROPAL_') === 0;
 		$isOrder = strpos($action, 'LINEORDER_') === 0;
@@ -101,6 +104,32 @@ class InterfaceResourceReservations extends DolibarrTriggers
 			$line = $this->fetchLine('contratdet', (int) $row->rowid);
 			if ($line && !empty($line->fk_product) && (int) $line->product_type === 1
 				&& $this->synchronizeLineReservation('contratdet', $line, $user, $langs, true) < 0) {
+				return -1;
+			}
+		}
+		return 1;
+	}
+
+	/**
+	 * Recheck proposal capacity on validation while keeping assignments provisional.
+	 *
+	 * @param int $proposalId Proposal id
+	 * @param User $user Current user
+	 * @param Translate $langs Translation handler
+	 * @return int<-1,1>
+	 */
+	private function synchronizeProposalReservations($proposalId, User $user, Translate $langs)
+	{
+		$sql = 'SELECT rowid FROM '.MAIN_DB_PREFIX.'propaldet WHERE fk_propal = '.((int) $proposalId).' ORDER BY rang, rowid';
+		$resql = $this->db->query($sql);
+		if (!$resql) {
+			$this->errors[] = $this->db->lasterror();
+			return -1;
+		}
+		while ($row = $this->db->fetch_object($resql)) {
+			$line = $this->fetchLine('propaldet', (int) $row->rowid);
+			if ($line && !empty($line->fk_product) && (int) $line->product_type === 1
+				&& $this->synchronizeLineReservation('propaldet', $line, $user, $langs, false, true) < 0) {
 				return -1;
 			}
 		}
@@ -163,9 +192,10 @@ class InterfaceResourceReservations extends DolibarrTriggers
 	 * @param User $user Current user
 	 * @param Translate $langs Translation handler
 	 * @param bool|null $forceConfirmed Force final capacity allocation during validation
+	 * @param bool $forceAvailability Recheck confirmed occupancy without confirming the assignment
 	 * @return int<-1,1>
 	 */
-	private function synchronizeLineReservation($elementType, $line, User $user, Translate $langs, $forceConfirmed = null)
+	private function synchronizeLineReservation($elementType, $line, User $user, Translate $langs, $forceConfirmed = null, $forceAvailability = false)
 	{
 		if ($this->deleteLineReservation($elementType, (int) $line->rowid) < 0) {
 			return -1;
@@ -189,6 +219,7 @@ class InterfaceResourceReservations extends DolibarrTriggers
 		$isConfirmed = $forceConfirmed !== null
 			? (bool) $forceConfirmed
 			: ($elementType === 'contratdet' && !empty($line->parent_status));
+		$checkAvailability = $isConfirmed || $forceAvailability;
 		$groups = array();
 		while ($preference = $this->db->fetch_object($resql)) {
 			$group = !empty($preference->requirement_group) ? $preference->requirement_group : 'row_'.$preference->rowid;
@@ -249,7 +280,7 @@ class InterfaceResourceReservations extends DolibarrTriggers
 					continue;
 				}
 				$fitsResourceCapacity = $capacityUsed > 0 && $capacityUsed <= $maximumCapacity;
-				$canAllocate = !$isConfirmed
+				$canAllocate = !$checkAvailability
 					? $fitsResourceCapacity
 					: ((!empty($dateStart) && !empty($dateEnd)) && $manager->canReserve('dolresource', (int) $preference->resource_id, $dateStart, $dateEnd, $capacityUsed, $maximumCapacity));
 				if ($canAllocate) {
@@ -284,7 +315,7 @@ class InterfaceResourceReservations extends DolibarrTriggers
 						}
 						$resourceId = (int) $preference->resource_id;
 						$alreadyStaged = isset($stagedCapacity[$resourceId]) ? $stagedCapacity[$resourceId] : 0.0;
-						$occupied = $isConfirmed ? $manager->getOccupiedCapacity('dolresource', $resourceId, $dateStart, $dateEnd) : 0.0;
+						$occupied = $checkAvailability ? $manager->getOccupiedCapacity('dolresource', $resourceId, $dateStart, $dateEnd) : 0.0;
 						if (($occupied + $alreadyStaged + $capacityUsed) > $maximumCapacity) {
 							continue;
 						}
