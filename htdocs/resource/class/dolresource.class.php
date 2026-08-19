@@ -73,6 +73,18 @@ class Dolresource extends CommonObject
 	 * @var int<0,1> Allow capacity exceeding a resource to spill over to the next preferred resource
 	 */
 	public $allow_overflow = 0;
+	/** @var ?float Type-specific metric value */
+	public $metric_value;
+	/** @var int Cooldown blocking time after use, in minutes */
+	public $cooldown_minutes = 0;
+	/** @var string Resource type capacity model */
+	public $capacity_mode = 'none';
+	/** @var ?string */
+	public $metric_label;
+	/** @var ?string */
+	public $metric_unit;
+	/** @var int<0,1> */
+	public $supports_cooldown = 0;
 
 	/**
 	 * @var string ID
@@ -120,10 +132,42 @@ class Dolresource extends CommonObject
 	 */
 	public $mandatory;
 
+	/** @var int Preference position */
+	public $position = 0;
+
 	/**
 	 * @var float Resource quantity consumed by one service unit
 	 */
 	public $users_per_service_unit;
+
+	/** @var string requirement or assignment */
+	public $relation_kind = 'requirement';
+	/** @var string capacity, production, delivery, equipment or operator */
+	public $resource_role = 'capacity';
+	/** @var string|null Alternative requirement group */
+	public $requirement_group;
+	/** @var float Number of resources required */
+	public $quantity_required = 1.0;
+	/** @var int Fixed duration in minutes */
+	public $duration_base = 0;
+	/** @var int Duration in minutes per unit */
+	public $duration_per_unit = 0;
+	/** @var int Setup time in minutes */
+	public $setup_duration = 0;
+	/** @var int Cleanup time in minutes */
+	public $cleanup_duration = 0;
+	/** @var string Scheduling policy */
+	public $scheduling_mode = 'same_as_parent';
+	/** @var string none, date or datetime */
+	public $start_input_mode = 'none';
+	/** @var string none, date, datetime or calculated */
+	public $end_input_mode = 'none';
+	/** @var string day, hour, minute or second */
+	public $time_precision = 'minute';
+	/** @var int<0,1> Share interval with other requirements */
+	public $simultaneous = 1;
+	/** @var int<0,1> Demand may be divided */
+	public $allow_split = 0;
 
 	/**
 	 * @var int
@@ -186,6 +230,8 @@ class Dolresource extends CommonObject
 			$this->email,
 			$this->max_users,
 			$this->allow_overflow,
+			$this->metric_value,
+			$this->cooldown_minutes,
 			$this->url,
 			$this->fk_code_type_resource,
 			$this->note_public,
@@ -211,6 +257,8 @@ class Dolresource extends CommonObject
 		$sql .= "email,";
 		$sql .= "max_users,";
 		$sql .= "allow_overflow,";
+		$sql .= "metric_value,";
+		$sql .= "cooldown_minutes,";
 		$sql .= "url,";
 		$sql .= "fk_code_type_resource,";
 		$sql .= "note_public,";
@@ -220,8 +268,17 @@ class Dolresource extends CommonObject
 		$sql .= "fk_user_author ";
 		$sql .= ") VALUES (";
 		$sql .= (int) (empty($this->entity) ? ((int) $conf->entity) : ((int) $this->entity)) . ", ";
-		foreach ($new_resource_values as $value) {
-			$sql .= " " . (!empty($value) ? "'" . $this->db->escape($value) . "'" : 'NULL') . ",";
+		foreach ($new_resource_values as $key => $value) {
+			// allow_overflow is NOT NULL and zero is a meaningful value.
+			if ($key === 10) {
+				$sql .= ' '.(!empty($value) ? 1 : 0).',';
+			} elseif ($key === 11) {
+				$sql .= ' '.(isset($value) && $value !== '' ? price2num($value, 'MS') : 'NULL').',';
+			} elseif ($key === 12) {
+				$sql .= ' '.max(0, (int) $value).',';
+			} else {
+				$sql .= " " . (!empty($value) ? "'" . $this->db->escape($value) . "'" : 'NULL') . ",";
+			}
 		}
 		$sql .= " ".((int) $this->status).",";
 		$sql .= " '" . $this->db->idate($this->date_creation) . "',";
@@ -267,7 +324,7 @@ class Dolresource extends CommonObject
 				$this->error .= ($this->error ? ', '.$errmsg : $errmsg);
 			}
 			$this->db->rollback();
-			return $error;
+			return -abs((int) $error);
 		} else {
 			$this->db->commit();
 			return $this->id;
@@ -297,6 +354,8 @@ class Dolresource extends CommonObject
 		$sql .= " t.email,";
 		$sql .= " t.max_users,";
 		$sql .= " t.allow_overflow,";
+		$sql .= " t.metric_value,";
+		$sql .= " t.cooldown_minutes,";
 		$sql .= " t.url,";
 		$sql .= " t.fk_code_type_resource,";
 		$sql .= " t.fk_statut,";
@@ -304,7 +363,8 @@ class Dolresource extends CommonObject
 		$sql .= " t.note_private,";
 		$sql .= " t.tms as date_modification,";
 		$sql .= " t.datec as date_creation,";
-		$sql .= " ty.label as type_label";
+		$sql .= " ty.label as type_label,";
+		$sql .= " ty.capacity_mode, ty.metric_label, ty.metric_unit, ty.supports_cooldown";
 		$sql .= " FROM ".MAIN_DB_PREFIX.$this->table_element." as t";
 		$sql .= " LEFT JOIN ".MAIN_DB_PREFIX."c_type_resource as ty ON ty.code=t.fk_code_type_resource";
 		if ($id) {
@@ -332,6 +392,8 @@ class Dolresource extends CommonObject
 				$this->email = $obj->email;
 				$this->max_users = $obj->max_users;
 				$this->allow_overflow = (int) $obj->allow_overflow;
+				$this->metric_value = isset($obj->metric_value) ? (float) $obj->metric_value : null;
+				$this->cooldown_minutes = (int) $obj->cooldown_minutes;
 				$this->url = $obj->url;
 				$this->fk_code_type_resource = $obj->fk_code_type_resource;
 				$this->status = (int) $obj->fk_statut;
@@ -340,6 +402,10 @@ class Dolresource extends CommonObject
 				$this->date_creation     = $this->db->jdate($obj->date_creation);
 				$this->date_modification = $this->db->jdate($obj->date_modification);
 				$this->type_label = $obj->type_label;
+				$this->capacity_mode = $obj->capacity_mode ?: 'none';
+				$this->metric_label = $obj->metric_label;
+				$this->metric_unit = $obj->metric_unit;
+				$this->supports_cooldown = (int) $obj->supports_cooldown;
 
 				// Retrieve all extrafield
 				// fetch optionals attributes and labels
@@ -428,6 +494,8 @@ class Dolresource extends CommonObject
 		$sql .= " email=".(isset($this->email) ? "'".$this->db->escape($this->email)."'" : "null").",";
 		$sql .= " max_users=".(isset($this->max_users) ? (int) $this->max_users : "null").",";
 		$sql .= " allow_overflow=".(!empty($this->allow_overflow) ? 1 : 0).",";
+		$sql .= " metric_value=".(isset($this->metric_value) ? price2num($this->metric_value, 'MS') : "null").",";
+		$sql .= " cooldown_minutes=".max(0, (int) $this->cooldown_minutes).",";
 		$sql .= " url=".(isset($this->url) ? "'".$this->db->escape($this->url)."'" : "null").",";
 		$sql .= " fk_code_type_resource=".(isset($this->fk_code_type_resource) ? "'".$this->db->escape($this->fk_code_type_resource)."'" : "null").",";
 		$sql .= " fk_statut=".((int) $this->status).",";
@@ -511,7 +579,22 @@ class Dolresource extends CommonObject
 		$sql .= " t.element_type,";
 		$sql .= " t.busy,";
 		$sql .= " t.mandatory,";
+		$sql .= " t.position,";
 		$sql .= " t.users_per_service_unit,";
+		$sql .= " t.relation_kind,";
+		$sql .= " t.resource_role,";
+		$sql .= " t.requirement_group,";
+		$sql .= " t.quantity_required,";
+		$sql .= " t.duration_base,";
+		$sql .= " t.duration_per_unit,";
+		$sql .= " t.setup_duration,";
+		$sql .= " t.cleanup_duration,";
+		$sql .= " t.scheduling_mode,";
+		$sql .= " t.start_input_mode,";
+		$sql .= " t.end_input_mode,";
+		$sql .= " t.time_precision,";
+		$sql .= " t.simultaneous,";
+		$sql .= " t.allow_split,";
 		$sql .= " t.fk_user_create,";
 		$sql .= " t.tms as date_modification";
 		$sql .= " FROM ".MAIN_DB_PREFIX."element_resources as t";
@@ -530,7 +613,22 @@ class Dolresource extends CommonObject
 				$this->element_type		= $obj->element_type;
 				$this->busy = $obj->busy;
 				$this->mandatory = $obj->mandatory;
+				$this->position = (int) $obj->position;
 				$this->users_per_service_unit = (float) $obj->users_per_service_unit;
+				$this->relation_kind = $obj->relation_kind;
+				$this->resource_role = $obj->resource_role;
+				$this->requirement_group = $obj->requirement_group;
+				$this->quantity_required = (float) $obj->quantity_required;
+				$this->duration_base = (int) $obj->duration_base;
+				$this->duration_per_unit = (int) $obj->duration_per_unit;
+				$this->setup_duration = (int) $obj->setup_duration;
+				$this->cleanup_duration = (int) $obj->cleanup_duration;
+				$this->scheduling_mode = $obj->scheduling_mode;
+				$this->start_input_mode = $obj->start_input_mode;
+				$this->end_input_mode = $obj->end_input_mode;
+				$this->time_precision = $obj->time_precision;
+				$this->simultaneous = (int) $obj->simultaneous;
+				$this->allow_split = (int) $obj->allow_split;
 				$this->fk_user_create = $obj->fk_user_create;
 				$this->date_modification = $obj->date_modification;
 
@@ -789,6 +887,20 @@ class Dolresource extends CommonObject
 		$sql .= " busy = ".(isset($this->busy) ? (int) $this->busy : "null").",";
 		$sql .= " mandatory = ".(isset($this->mandatory) ? (int) $this->mandatory : "null").",";
 		$sql .= " users_per_service_unit = ".(isset($this->users_per_service_unit) ? price2num($this->users_per_service_unit, 'MS') : "null").",";
+		$sql .= " relation_kind = '".$this->db->escape($this->relation_kind ?: 'requirement')."',";
+		$sql .= " resource_role = '".$this->db->escape($this->resource_role ?: 'capacity')."',";
+		$sql .= " requirement_group = ".(!empty($this->requirement_group) ? "'".$this->db->escape($this->requirement_group)."'" : "null").",";
+		$sql .= " quantity_required = ".price2num($this->quantity_required, 'MS').",";
+		$sql .= " duration_base = ".((int) $this->duration_base).",";
+		$sql .= " duration_per_unit = ".((int) $this->duration_per_unit).",";
+		$sql .= " setup_duration = ".((int) $this->setup_duration).",";
+		$sql .= " cleanup_duration = ".((int) $this->cleanup_duration).",";
+		$sql .= " scheduling_mode = '".$this->db->escape($this->scheduling_mode ?: 'same_as_parent')."',";
+		$sql .= " start_input_mode = '".$this->db->escape($this->start_input_mode ?: 'none')."',";
+		$sql .= " end_input_mode = '".$this->db->escape($this->end_input_mode ?: 'none')."',";
+		$sql .= " time_precision = '".$this->db->escape($this->time_precision ?: 'minute')."',";
+		$sql .= " simultaneous = ".(!empty($this->simultaneous) ? 1 : 0).",";
+		$sql .= " allow_split = ".(!empty($this->allow_split) ? 1 : 0).",";
 		$sql .= " tms = ".(dol_strlen((string) $this->date_modification) != 0 ? "'".$this->db->idate($this->date_modification)."'" : 'null');
 		$sql .= " WHERE rowid=".((int) $this->id);
 
@@ -838,9 +950,12 @@ class Dolresource extends CommonObject
 	public function getElementResources(string $element, int $element_id, string $resource_type = '')
 	{
 		// Links between objects are stored in this table
-		$sql = 'SELECT rowid, resource_id, resource_type, busy, mandatory, position, users_per_service_unit';
+		$sql = 'SELECT rowid, resource_id, resource_type, busy, mandatory, position, users_per_service_unit,';
+		$sql .= ' relation_kind, resource_role, requirement_group, quantity_required, duration_base, duration_per_unit,';
+		$sql .= ' setup_duration, cleanup_duration, scheduling_mode, start_input_mode, end_input_mode, time_precision, simultaneous, allow_split';
 		$sql .= ' FROM '.MAIN_DB_PREFIX.'element_resources';
 		$sql .= " WHERE element_id=".((int) $element_id)." AND element_type='".$this->db->escape($element)."'";
+		$sql .= " AND (relation_kind IS NULL OR relation_kind = 'requirement')";
 		if ($resource_type) {
 			$sql .= " AND resource_type LIKE '%".$this->db->escape($resource_type)."%'";
 		}
@@ -863,7 +978,21 @@ class Dolresource extends CommonObject
 					'busy' => $obj->busy,
 					'mandatory' => $obj->mandatory,
 					'position' => (int) $obj->position,
-					'users_per_service_unit' => (float) $obj->users_per_service_unit
+					'users_per_service_unit' => (float) $obj->users_per_service_unit,
+					'relation_kind' => $obj->relation_kind ?: 'requirement',
+					'resource_role' => $obj->resource_role ?: 'capacity',
+					'requirement_group' => $obj->requirement_group,
+					'quantity_required' => (float) $obj->quantity_required,
+					'duration_base' => (int) $obj->duration_base,
+					'duration_per_unit' => (int) $obj->duration_per_unit,
+					'setup_duration' => (int) $obj->setup_duration,
+					'cleanup_duration' => (int) $obj->cleanup_duration,
+					'scheduling_mode' => $obj->scheduling_mode ?: 'same_as_parent',
+					'start_input_mode' => $obj->start_input_mode ?: 'none',
+					'end_input_mode' => $obj->end_input_mode ?: 'none',
+					'time_precision' => $obj->time_precision ?: 'minute',
+					'simultaneous' => (int) $obj->simultaneous,
+					'allow_split' => (int) $obj->allow_split
 				);
 				$i++;
 			}
@@ -1115,11 +1244,17 @@ class Dolresource extends CommonObject
 	 */
 	public function getOccupiedCapacity($dateStart = null, $dateEnd = null)
 	{
+		if (!empty($dateStart) && !empty($dateEnd)) {
+			require_once DOL_DOCUMENT_ROOT.'/resource/class/resourcereservationmanager.class.php';
+			$manager = new ResourceReservationManager($this->db);
+			return $manager->getOccupiedCapacity('dolresource', (int) $this->id, $dateStart, $dateEnd);
+		}
 		$sql = 'SELECT COALESCE(SUM(capacity_used), 0) as occupied';
 		$sql .= ' FROM '.MAIN_DB_PREFIX.'element_resources';
 		$sql .= ' WHERE resource_id = '.((int) $this->id);
 		$sql .= " AND resource_type = 'dolresource'";
 		$sql .= " AND reservation_status = 'confirmed'";
+		$sql .= " AND (relation_kind = 'assignment' OR relation_kind IS NULL)";
 		if (!empty($dateStart)) {
 			$sql .= " AND (date_end IS NULL OR date_end >= '".$this->db->escape($dateStart)."')";
 		}

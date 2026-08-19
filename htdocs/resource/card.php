@@ -63,6 +63,8 @@ $phone					= GETPOST('phone', 'alpha');
 $email					= GETPOST('email', 'alpha');
 $max_users				= GETPOSTINT('max_users');
 $allow_overflow			= GETPOSTINT('allow_overflow');
+$metric_value			= GETPOST('metric_value', 'alpha');
+$cooldown_minutes		= GETPOSTINT('cooldown_minutes');
 $url					= GETPOST('url', 'alpha');
 $confirm				= GETPOST('confirm', 'aZ09');
 $fk_code_type_resource	= GETPOST('fk_code_type_resource', 'aZ09');
@@ -134,6 +136,8 @@ if (empty($reshook)) {
 				$object->email					= $email;
 				$object->max_users				= $max_users;
 				$object->allow_overflow			= $allow_overflow ? 1 : 0;
+				$object->metric_value			= ($metric_value !== '' ? (float) price2num($metric_value, 'MS') : null);
+				$object->cooldown_minutes		= max(0, $cooldown_minutes);
 				$object->url					= $url;
 				$object->fk_code_type_resource	= $fk_code_type_resource;
 				$object->status                 = $status;
@@ -220,6 +224,8 @@ if (empty($reshook)) {
 				$object->email					= $email;
 				$object->max_users				= $max_users;
 				$object->allow_overflow			= $allow_overflow ? 1 : 0;
+				$object->metric_value			= ($metric_value !== '' ? (float) price2num($metric_value, 'MS') : null);
+				$object->cooldown_minutes		= max(0, $cooldown_minutes);
 				$object->url					= $url;
 				$object->fk_code_type_resource  = $fk_code_type_resource;
 				if ($status === Dolresource::STATUS_UNKNOWN && !$object->hasStatusProvider()) {
@@ -285,6 +291,12 @@ if (empty($reshook)) {
  * View
  */
 
+// A resource card without an id is necessarily a creation form. This also
+// protects country/state auto-submits from trying to fetch an empty object.
+if ($id <= 0 && empty($ref) && $action !== 'create' && $action !== 'add') {
+	$action = 'create';
+}
+
 $title = $langs->trans($action == 'create' ? 'AddResource' : 'ResourceSingular');
 $help_url = '';
 llxHeader('', $title, $help_url, '', 0, 0, '', '', '', 'mod-resource page-card');
@@ -310,7 +322,7 @@ if ($action == 'create' || $object->fetch($id, $ref) > 0) {
 			print '$(document).ready(function () {
                         $("#selectcountry_id").change(function() {
 							console.log("selectcountry_id change");
-                        	document.formresource.action.value="' . ($action == 'create' ? 'create' : 'edit') . '";
+							document.formresource.elements["action"].value="' . ($action == 'create' ? 'create' : 'edit') . '";
                         	document.formresource.submit();
                         });
                      });';
@@ -318,9 +330,15 @@ if ($action == 'create' || $object->fetch($id, $ref) > 0) {
 		}
 
 
-		// Create/Edit object
+		// Resource-type capabilities drive the fields displayed below.
+		$typeModels = array();
+		$resqlModels = $db->query('SELECT code, capacity_mode, metric_label, metric_unit, supports_cooldown FROM '.MAIN_DB_PREFIX.'c_type_resource WHERE active = 1');
+		while ($resqlModels && ($typeModel = $db->fetch_object($resqlModels))) {
+			$typeModels[$typeModel->code] = array('capacity_mode' => $typeModel->capacity_mode, 'metric_label' => $typeModel->metric_label, 'metric_unit' => $typeModel->metric_unit, 'supports_cooldown' => (int) $typeModel->supports_cooldown);
+		}
 
-		print '<form enctype="multipart/form-data" action="'.$_SERVER["PHP_SELF"].'?id='.$id.'" method="POST" name="formresource">';
+		$formAction = $_SERVER["PHP_SELF"].($action === 'edit' && $id > 0 ? '?id='.((int) $id) : '');
+		print '<form enctype="multipart/form-data" action="'.$formAction.'" method="POST" name="formresource">';
 		print '<input type="hidden" name="token" value="'.newToken().'">';
 		print '<input type="hidden" name="action" value="'.($action == "create" ? "add" : "update").'">';
 
@@ -415,15 +433,21 @@ if ($action == 'create' || $object->fetch($id, $ref) > 0) {
 		print '</tr>';
 
 		// Max users
-		print '<tr><td>'.$form->editfieldkey('MaxUsers', 'max_users', '', $object, 0, 'string', '', 0, 0, 'id', $langs->trans('MaxUsersResourceDesc')).'</td>';
+		print '<tr class="resource-model-users"><td>'.$form->editfieldkey('MaxUsers', 'max_users', '', $object, 0, 'string', '', 0, 0, 'id', $langs->trans('MaxUsersResourceDesc')).'</td>';
 		print '<td>';
 		print img_picto('', 'object_user', 'class="pictofixedwidth"');
 		print '<input type="text" class="width75 right" name="max_users" id="max_users" value="'.(GETPOSTISSET('max_users') ? GETPOST('max_users', 'int') : ($object->max_users > 0 ? $object->max_users : '')).'"></td>';
 		print '</tr>';
 
-		print '<tr><td>'.$form->editfieldkey('AllowResourceOverflow', 'allow_overflow', '', $object, 0, 'string', '', 0, 0, 'id', $langs->trans('AllowResourceOverflowHelp')).'</td>';
+		print '<tr class="resource-model-users"><td>'.$form->editfieldkey('AllowResourceOverflow', 'allow_overflow', '', $object, 0, 'string', '', 0, 0, 'id', $langs->trans('AllowResourceOverflowHelp')).'</td>';
 		print '<td>'.$form->selectyesno('allow_overflow', GETPOSTISSET('allow_overflow') ? $allow_overflow : $object->allow_overflow, 1).'</td>';
 		print '</tr>';
+
+		print '<tr class="resource-model-custom"><td><span id="resource_metric_label">'.$langs->trans('ResourceMetricValue').'</span></td><td>';
+		print '<input type="text" class="width100 right" name="metric_value" value="'.dol_escape_htmltag(GETPOSTISSET('metric_value') ? $metric_value : $object->metric_value).'"> <span id="resource_metric_unit"></span></td></tr>';
+		print '<tr class="resource-model-cooldown"><td>'.$langs->trans('ResourceCooldownMinutes').'</td><td>';
+		print '<input type="number" min="0" class="width75" name="cooldown_minutes" value="'.(GETPOSTISSET('cooldown_minutes') ? $cooldown_minutes : (int) $object->cooldown_minutes).'"> '.$langs->trans('minutes').'</td></tr>';
+		print '<script>jQuery(function(){var models='.json_encode($typeModels).'; function applyResourceModel(){var model=models[jQuery("#selectfk_code_type_resource").val()] || {capacity_mode:"none",supports_cooldown:0}; jQuery(".resource-model-users").toggle(model.capacity_mode === "users"); jQuery(".resource-model-custom").toggle(model.capacity_mode === "custom"); jQuery(".resource-model-cooldown").toggle(!!model.supports_cooldown); jQuery("#resource_metric_label").text(model.metric_label || '.json_encode($langs->transnoentities('ResourceMetricValue')).'); jQuery("#resource_metric_unit").text(model.metric_unit || "");} jQuery("#selectfk_code_type_resource").on("change", applyResourceModel); applyResourceModel();});</script>';
 
 		// URL
 		print '<tr><td>'.$form->editfieldkey('URL', 'url', '', $object, 0).'</td>';
@@ -492,18 +516,17 @@ if ($action == 'create' || $object->fetch($id, $ref) > 0) {
 		print '</td>';
 		print '</tr>';
 
-		// Max users
-		print '<tr>';
-		print '<td>'.$langs->trans("MaxUsers").'</td>';
-		print '<td>';
-		print $object->max_users > 0 ? $object->max_users : '';
-		print '</td>';
-		print '</tr>';
+		if ($object->capacity_mode === 'users') {
+			print '<tr><td>'.$langs->trans("MaxUsers").'</td><td>'.($object->max_users > 0 ? $object->max_users : '').'</td></tr>';
+			print '<tr><td>'.$langs->trans('AllowResourceOverflow').'</td><td>'.yn($object->allow_overflow).'</td></tr>';
+		}
 
-		print '<tr>';
-		print '<td>'.$langs->trans('AllowResourceOverflow').'</td>';
-		print '<td>'.yn($object->allow_overflow).'</td>';
-		print '</tr>';
+		if ($object->metric_value !== null) {
+			print '<tr><td>'.dol_escape_htmltag($object->metric_label ?: $langs->trans('ResourceMetricValue')).'</td><td>'.price($object->metric_value).' '.dol_escape_htmltag($object->metric_unit).'</td></tr>';
+		}
+		if ($object->cooldown_minutes > 0) {
+			print '<tr><td>'.$langs->trans('ResourceCooldownMinutes').'</td><td>'.((int) $object->cooldown_minutes).' '.$langs->trans('minutes').'</td></tr>';
+		}
 
 		// Other attributes
 		include DOL_DOCUMENT_ROOT.'/core/tpl/extrafields_view.tpl.php';

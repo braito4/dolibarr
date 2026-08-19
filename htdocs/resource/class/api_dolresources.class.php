@@ -188,7 +188,7 @@ class Dolresources extends DolibarrApi
 		}
 		$allowedFields = array(
 			'ref', 'address', 'zip', 'town', 'country_id', 'state_id', 'description', 'phone', 'email',
-			'max_users', 'allow_overflow', 'url', 'fk_code_type_resource', 'status', 'note_public', 'note_private', 'array_options'
+			'max_users', 'allow_overflow', 'metric_value', 'cooldown_minutes', 'url', 'fk_code_type_resource', 'status', 'note_public', 'note_private', 'array_options'
 		);
 		foreach ($requestData as $field => $value) {
 			if (!in_array($field, $allowedFields, true)) {

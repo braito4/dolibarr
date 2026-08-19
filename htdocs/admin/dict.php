@@ -289,7 +289,7 @@ $tabsql[DICT_INPUT_METHOD] = "SELECT t.rowid as rowid, t.code, t.libelle, t.acti
 $tabsql[DICT_AVAILABILITY] = "SELECT c.rowid as rowid, c.code, c.label, c.type_duration, c.qty, c.active, c.position FROM ".MAIN_DB_PREFIX."c_availability AS c";
 $tabsql[DICT_INPUT_REASON] = "SELECT t.rowid as rowid, t.code, t.label, t.active FROM ".MAIN_DB_PREFIX."c_input_reason as t";
 $tabsql[DICT_REVENUESTAMP] = "SELECT t.rowid as rowid, t.taux, t.revenuestamp_type, c.label as country, c.code as country_code, t.fk_pays as country_id, t.note, t.active, t.accountancy_code_sell, t.accountancy_code_buy FROM ".MAIN_DB_PREFIX."c_revenuestamp as t, ".MAIN_DB_PREFIX."c_country as c WHERE t.fk_pays=c.rowid";
-$tabsql[DICT_TYPE_RESOURCE] = "SELECT t.rowid as rowid, t.code, t.label, t.active FROM ".MAIN_DB_PREFIX."c_type_resource as t";
+$tabsql[DICT_TYPE_RESOURCE] = "SELECT t.rowid as rowid, t.code, t.label, t.capacity_mode, t.metric_label, t.metric_unit, t.supports_cooldown, t.active FROM ".MAIN_DB_PREFIX."c_type_resource as t";
 $tabsql[DICT_TYPE_CONTAINER] = "SELECT t.rowid as rowid, t.code, t.label, t.active, t.module FROM ".MAIN_DB_PREFIX."c_type_container as t WHERE t.entity IN (".getEntity($tabname[DICT_TYPE_CONTAINER]).")";
 //$tabsql[DICT_UNITS]= "SELECT t.rowid as rowid, t.code, t.label, t.short_label, t.active FROM ".MAIN_DB_PREFIX."c_units as t";
 $tabsql[DICT_STCOMM] = "SELECT t.id    as rowid, t.code, t.libelle, t.picto, t.active FROM ".MAIN_DB_PREFIX."c_stcomm as t";

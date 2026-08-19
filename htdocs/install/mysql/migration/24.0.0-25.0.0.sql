@@ -78,4 +78,67 @@ UPDATE llx_commande_fournisseurdet SET subprice_ttc = 0 WHERE subprice_ttc <> 0 
 UPDATE llx_facture_fourn_det SET pu_ttc = 0 WHERE pu_ttc <> 0 AND EXISTS (SELECT c.rowid FROM llx_const as c WHERE c.name = 'MAIN_VERSION_LAST_UPGRADE' AND c.value < '25.0.0');
 UPDATE llx_supplier_proposaldet SET subprice_ttc = 0 WHERE subprice_ttc <> 0 AND EXISTS (SELECT c.rowid FROM llx_const as c WHERE c.name = 'MAIN_VERSION_LAST_UPGRADE' AND c.value < '25.0.0');
 
+-- Resource requirements and common reservation engine
+ALTER TABLE llx_resource ADD COLUMN allow_overflow smallint NOT NULL DEFAULT 0;
+-- VMYSQL4.1 ALTER TABLE llx_resource MODIFY COLUMN fk_statut smallint NOT NULL DEFAULT 1;
+-- VPGSQL8.2 ALTER TABLE llx_resource ALTER COLUMN fk_statut SET DEFAULT 1;
+ALTER TABLE llx_element_resources ADD COLUMN position integer DEFAULT 0;
+ALTER TABLE llx_element_resources ADD COLUMN relation_kind varchar(16) NOT NULL DEFAULT 'requirement';
+ALTER TABLE llx_element_resources ADD COLUMN resource_role varchar(16) NOT NULL DEFAULT 'capacity';
+ALTER TABLE llx_element_resources ADD COLUMN requirement_group varchar(32) DEFAULT NULL;
+ALTER TABLE llx_element_resources ADD COLUMN quantity_required real DEFAULT 1;
+ALTER TABLE llx_element_resources ADD COLUMN users_per_service_unit real DEFAULT NULL;
+ALTER TABLE llx_element_resources ADD COLUMN duration_base integer DEFAULT 0;
+ALTER TABLE llx_element_resources ADD COLUMN duration_per_unit integer DEFAULT 0;
+ALTER TABLE llx_element_resources ADD COLUMN setup_duration integer DEFAULT 0;
+ALTER TABLE llx_element_resources ADD COLUMN cleanup_duration integer DEFAULT 0;
+ALTER TABLE llx_element_resources ADD COLUMN scheduling_mode varchar(16) NOT NULL DEFAULT 'same_as_parent';
+ALTER TABLE llx_element_resources ADD COLUMN start_input_mode varchar(16) NOT NULL DEFAULT 'none';
+ALTER TABLE llx_element_resources ADD COLUMN end_input_mode varchar(16) NOT NULL DEFAULT 'none';
+ALTER TABLE llx_element_resources ADD COLUMN time_precision varchar(16) NOT NULL DEFAULT 'minute';
+ALTER TABLE llx_element_resources ADD COLUMN simultaneous smallint NOT NULL DEFAULT 1;
+ALTER TABLE llx_element_resources ADD COLUMN allow_split smallint NOT NULL DEFAULT 0;
+ALTER TABLE llx_element_resources ADD COLUMN service_quantity real DEFAULT NULL;
+ALTER TABLE llx_element_resources ADD COLUMN service_duration varchar(16) DEFAULT NULL;
+ALTER TABLE llx_element_resources ADD COLUMN capacity_used real DEFAULT NULL;
+ALTER TABLE llx_element_resources ADD COLUMN date_start datetime DEFAULT NULL;
+ALTER TABLE llx_element_resources ADD COLUMN date_end datetime DEFAULT NULL;
+ALTER TABLE llx_element_resources ADD COLUMN reservation_status varchar(16) DEFAULT NULL;
+UPDATE llx_element_resources SET relation_kind = 'assignment' WHERE reservation_status IS NOT NULL;
+UPDATE llx_element_resources SET requirement_group = 'legacy_default', mandatory = 1 WHERE reservation_status IS NULL AND element_type IN ('product', 'service');
+ALTER TABLE llx_element_resources ADD INDEX idx_element_resources_requirement (element_type, element_id, relation_kind, position);
+ALTER TABLE llx_element_resources ADD INDEX idx_element_resources_booking (resource_type, resource_id, relation_kind, reservation_status, date_start, date_end);
+ALTER TABLE llx_c_type_resource ADD COLUMN capacity_mode varchar(16) NOT NULL DEFAULT 'none';
+ALTER TABLE llx_c_type_resource ADD COLUMN metric_label varchar(128) DEFAULT NULL;
+ALTER TABLE llx_c_type_resource ADD COLUMN metric_unit varchar(32) DEFAULT NULL;
+ALTER TABLE llx_c_type_resource ADD COLUMN supports_cooldown smallint NOT NULL DEFAULT 0;
+ALTER TABLE llx_resource ADD COLUMN metric_value real DEFAULT NULL;
+ALTER TABLE llx_resource ADD COLUMN cooldown_minutes integer NOT NULL DEFAULT 0;
+UPDATE llx_c_type_resource SET capacity_mode = 'users' WHERE code = 'RES_ROOMS';
+UPDATE llx_c_type_resource SET capacity_mode = 'custom', metric_label = 'Usage value' WHERE code = 'RES_CARS';
+INSERT INTO llx_c_type_resource (code, label, capacity_mode, supports_cooldown, active) SELECT 'RES_MACHINES', 'Machinery', 'none', 1, 1 WHERE NOT EXISTS (SELECT 1 FROM llx_c_type_resource WHERE code = 'RES_MACHINES');
+
+CREATE TABLE llx_resource_time_slot
+(
+  rowid integer AUTO_INCREMENT PRIMARY KEY,
+  entity integer DEFAULT 1 NOT NULL,
+  fk_resource integer NOT NULL,
+  label varchar(255) DEFAULT NULL,
+  slot_type varchar(16) NOT NULL DEFAULT 'absolute',
+  date_start datetime DEFAULT NULL,
+  date_end datetime DEFAULT NULL,
+  weekday smallint DEFAULT NULL,
+  time_start integer DEFAULT NULL,
+  time_end integer DEFAULT NULL,
+  capacity real DEFAULT NULL,
+  active smallint NOT NULL DEFAULT 1,
+  fk_user_create integer DEFAULT NULL,
+  fk_user_modif integer DEFAULT NULL,
+  date_creation datetime DEFAULT NULL,
+  tms timestamp DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+) ENGINE=innodb;
+ALTER TABLE llx_resource_time_slot ADD INDEX idx_resource_time_slot_resource (fk_resource);
+ALTER TABLE llx_resource_time_slot ADD INDEX idx_resource_time_slot_absolute (fk_resource, active, date_start, date_end);
+ALTER TABLE llx_resource_time_slot ADD INDEX idx_resource_time_slot_weekly (fk_resource, active, weekday, time_start, time_end);
+
 -- end of migration

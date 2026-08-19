@@ -79,6 +79,34 @@ $confirm                = GETPOST('confirm', 'alpha');
 $socid                  = GETPOSTINT('socid');
 $direction              = GETPOST('direction', 'alpha');
 $users_per_service_unit = (float) price2num(GETPOST('users_per_service_unit', 'alpha'), 'MS');
+$resource_role          = GETPOST('resource_role', 'alpha') ?: 'capacity';
+$requirement_group      = GETPOST('requirement_group', 'alphanohtml');
+$quantity_required      = (float) price2num(GETPOST('quantity_required', 'alpha'), 'MS');
+$duration_base          = GETPOSTINT('duration_base');
+$duration_per_unit      = GETPOSTINT('duration_per_unit');
+$setup_duration         = GETPOSTINT('setup_duration');
+$cleanup_duration       = GETPOSTINT('cleanup_duration');
+$scheduling_mode        = GETPOST('scheduling_mode', 'alpha') ?: 'same_as_parent';
+$start_input_mode       = GETPOST('start_input_mode', 'alpha') ?: 'none';
+$end_input_mode         = GETPOST('end_input_mode', 'alpha') ?: 'none';
+$time_precision         = GETPOST('time_precision', 'alpha') ?: 'minute';
+$simultaneous           = GETPOSTINT('simultaneous');
+$allow_split            = GETPOSTINT('allow_split');
+
+$allowedResourceRoles = array('capacity', 'production', 'delivery', 'equipment', 'operator');
+$allowedSchedulingModes = array('same_as_parent', 'fixed', 'next_available', 'within_window', 'manual');
+$allowedStartInputModes = array('none', 'date', 'datetime');
+$allowedEndInputModes = array('none', 'date', 'datetime', 'calculated');
+$allowedTimePrecisions = array('day', 'hour', 'minute', 'second');
+if (!in_array($resource_role, $allowedResourceRoles, true)) {
+	$resource_role = 'capacity';
+}
+if (!in_array($scheduling_mode, $allowedSchedulingModes, true)) {
+	$scheduling_mode = 'same_as_parent';
+}
+if (!in_array($start_input_mode, $allowedStartInputModes, true)) $start_input_mode = 'none';
+if (!in_array($end_input_mode, $allowedEndInputModes, true)) $end_input_mode = 'none';
+if (!in_array($time_precision, $allowedTimePrecisions, true)) $time_precision = 'minute';
 
 if (empty($mandatory)) {
 	$mandatory = 0;
@@ -243,9 +271,23 @@ if (empty($reshook)) {
 			if (!$error) {
 				if ($element == 'product' || $element == 'service') {
 					$busy = 0;
-					$mandatory = 0;
 				}
-				$res = $objstat->add_element_resource($resource_id, $resource_type, $busy, $mandatory, 0, 0, $users_per_service_unit);
+				$requirement = array(
+					'resource_role' => $resource_role,
+					'requirement_group' => $requirement_group,
+					'quantity_required' => $quantity_required > 0 ? $quantity_required : 1,
+					'duration_base' => $duration_base,
+					'duration_per_unit' => $duration_per_unit,
+					'setup_duration' => $setup_duration,
+					'cleanup_duration' => $cleanup_duration,
+					'scheduling_mode' => $scheduling_mode,
+					'start_input_mode' => $start_input_mode,
+					'end_input_mode' => $end_input_mode,
+					'time_precision' => $time_precision,
+					'simultaneous' => $simultaneous,
+					'allow_split' => $allow_split,
+				);
+				$res = $objstat->add_element_resource($resource_id, $resource_type, $busy, $mandatory, 0, 0, $users_per_service_unit, $requirement);
 			}
 		}
 
@@ -270,6 +312,19 @@ if (empty($reshook)) {
 					setEventMessages($langs->trans('ErrorFieldRequired', $langs->transnoentitiesnoconv('UsersPerServiceUnit')), null, 'errors');
 				} else {
 					$object->users_per_service_unit = $users_per_service_unit;
+					$object->resource_role = $resource_role;
+					$object->requirement_group = $requirement_group;
+					$object->quantity_required = $quantity_required > 0 ? $quantity_required : 1;
+					$object->duration_base = $duration_base;
+					$object->duration_per_unit = $duration_per_unit;
+					$object->setup_duration = $setup_duration;
+					$object->cleanup_duration = $cleanup_duration;
+					$object->scheduling_mode = $scheduling_mode;
+					$object->start_input_mode = $start_input_mode;
+					$object->end_input_mode = $end_input_mode;
+					$object->time_precision = $time_precision;
+					$object->simultaneous = $simultaneous;
+					$object->allow_split = $allow_split;
 				}
 			}
 

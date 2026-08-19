@@ -8,6 +8,7 @@
  */
 
 require_once DOL_DOCUMENT_ROOT.'/core/triggers/dolibarrtriggers.class.php';
+require_once DOL_DOCUMENT_ROOT.'/resource/class/resourcereservationmanager.class.php';
 
 /**
  * Synchronize provisional proposal reservations and confirmed contract reservations.
@@ -45,8 +46,9 @@ class InterfaceResourceReservations extends DolibarrTriggers
 		}
 
 		$isProposal = strpos($action, 'LINEPROPAL_') === 0;
+		$isOrder = strpos($action, 'LINEORDER_') === 0;
 		$isContract = strpos($action, 'LINECONTRACT_') === 0;
-		if (!$isProposal && !$isContract) {
+		if (!$isProposal && !$isOrder && !$isContract) {
 			return 0;
 		}
 
@@ -62,7 +64,7 @@ class InterfaceResourceReservations extends DolibarrTriggers
 			return 0;
 		}
 
-		$elementType = $isProposal ? 'propaldet' : 'contratdet';
+		$elementType = $isProposal ? 'propaldet' : ($isOrder ? 'commandedet' : 'contratdet');
 		if (substr($action, -7) === '_DELETE') {
 			return $this->deleteLineReservation($elementType, $lineId);
 		}
@@ -78,7 +80,7 @@ class InterfaceResourceReservations extends DolibarrTriggers
 	/**
 	 * Fetch normalized service line data.
 	 *
-	 * @param string $elementType propaldet or contratdet
+	 * @param string $elementType propaldet, commandedet or contratdet
 	 * @param int $lineId Line id
 	 * @return object|null
 	 */
@@ -87,6 +89,10 @@ class InterfaceResourceReservations extends DolibarrTriggers
 		if ($elementType === 'propaldet') {
 			$sql = 'SELECT d.rowid, d.fk_product, d.product_type, d.qty, d.date_start, d.date_end, p.duration as service_duration';
 			$sql .= ' FROM '.MAIN_DB_PREFIX.'propaldet d';
+			$sql .= ' LEFT JOIN '.MAIN_DB_PREFIX.'product p ON p.rowid = d.fk_product';
+		} elseif ($elementType === 'commandedet') {
+			$sql = 'SELECT d.rowid, d.fk_product, d.product_type, d.qty, d.date_start, d.date_end, p.duration as service_duration';
+			$sql .= ' FROM '.MAIN_DB_PREFIX.'commandedet d';
 			$sql .= ' LEFT JOIN '.MAIN_DB_PREFIX.'product p ON p.rowid = d.fk_product';
 		} else {
 			$sql = 'SELECT d.rowid, d.fk_product, d.product_type, d.qty,';
@@ -119,7 +125,7 @@ class InterfaceResourceReservations extends DolibarrTriggers
 	}
 
 	/**
-	 * Assign the first preferred resource with enough confirmed capacity.
+	 * Assign every independent requirement, using grouped rows as alternatives.
 	 *
 	 * @param string $elementType Source element type
 	 * @param object $line Normalized line
@@ -133,87 +139,116 @@ class InterfaceResourceReservations extends DolibarrTriggers
 			return -1;
 		}
 
-		$sql = 'SELECT er.resource_id, er.position, er.users_per_service_unit, r.max_users';
+		$sql = 'SELECT er.*, r.max_users, r.cooldown_minutes, ty.capacity_mode';
 		$sql .= ' FROM '.MAIN_DB_PREFIX.'element_resources er';
 		$sql .= ' INNER JOIN '.MAIN_DB_PREFIX.'resource r ON r.rowid = er.resource_id';
+		$sql .= ' LEFT JOIN '.MAIN_DB_PREFIX.'c_type_resource ty ON ty.code = r.fk_code_type_resource';
 		$sql .= " WHERE er.element_type = 'product'";
 		$sql .= ' AND er.element_id = '.((int) $line->fk_product);
 		$sql .= " AND er.resource_type = 'dolresource'";
+		$sql .= " AND (er.relation_kind IS NULL OR er.relation_kind = 'requirement')";
 		$sql .= ' AND r.fk_statut = 1';
-		$sql .= ' ORDER BY er.position, er.rowid';
+		$sql .= ' ORDER BY er.requirement_group, er.position, er.rowid';
 		$resql = $this->db->query($sql);
 		if (!$resql || !$this->db->num_rows($resql)) {
 			return 1;
 		}
 
 		$isConfirmed = ($elementType === 'contratdet');
-		$selected = null;
+		$groups = array();
 		while ($preference = $this->db->fetch_object($resql)) {
-			$perUnit = (float) $preference->users_per_service_unit;
-			$capacityUsed = abs((float) $line->qty) * $perUnit;
-			if (!$isConfirmed || $this->hasCapacity($preference, $capacityUsed, $line->date_start, $line->date_end)) {
-				$selected = $preference;
-				$selected->capacity_used = $capacityUsed;
-				break;
+			$group = !empty($preference->requirement_group) ? $preference->requirement_group : 'row_'.$preference->rowid;
+			$groups[$group][] = $preference;
+		}
+		$manager = new ResourceReservationManager($this->db);
+		$commonStart = !empty($line->date_start) ? $line->date_start : null;
+		$commonEnd = !empty($line->date_end) ? $line->date_end : null;
+		$temporalPolicy = $manager->getTemporalPolicy('product', (int) $line->fk_product);
+		$langs->load('resource');
+		if ($temporalPolicy['show_start'] && empty($commonStart)) {
+			$this->errors[] = $langs->trans('ResourceStartTimeRequired');
+			return -1;
+		}
+		if ($temporalPolicy['show_end'] && empty($commonEnd)) {
+			$this->errors[] = $langs->trans('ResourceEndTimeRequired');
+			return -1;
+		}
+		if ($temporalPolicy['calculate_end'] && !empty($commonStart) && empty($commonEnd)) {
+			$duration = 0;
+			foreach ($groups as $durationAlternatives) {
+				foreach ($durationAlternatives as $durationRequirement) {
+					$duration = max($duration, $manager->calculateDuration((array) $durationRequirement, (float) $line->qty));
+				}
+			}
+			if ($duration <= 0 && !empty($line->service_duration)) $duration = $manager->durationStringToMinutes($line->service_duration);
+			if ($duration <= 0) {
+				$this->errors[] = $langs->trans('ResourceDurationRequiredForCalculatedEnd');
+				return -1;
+			}
+			$commonEnd = $this->db->idate($this->db->jdate($commonStart) + ($duration * 60));
+		}
+		foreach ($groups as $alternatives) {
+			$selected = null;
+			foreach ($alternatives as $preference) {
+				$perUnit = (float) $preference->users_per_service_unit;
+				$capacityUsed = abs((float) $line->qty) * $perUnit;
+				$dateStart = $commonStart;
+				$dateEnd = $commonEnd;
+				$cooldown = max(0, (int) $preference->cooldown_minutes);
+				$maximumCapacity = ($preference->capacity_mode === 'users') ? (float) $preference->max_users : 1.0;
+				if (!empty($dateEnd) && $cooldown > 0) {
+					$dateEnd = $this->db->idate($this->db->jdate($dateEnd) + ($cooldown * 60));
+				}
+				$needsAutomaticSlot = (empty($dateStart) || empty($dateEnd)) && $preference->scheduling_mode === 'next_available';
+				if ($needsAutomaticSlot) {
+					$duration = $manager->calculateDuration((array) $preference, (float) $line->qty) + $cooldown;
+					if ($duration <= 0 && !empty($line->service_duration)) {
+						$duration = $manager->durationStringToMinutes($line->service_duration);
+					}
+					$slot = $manager->findNextAvailable('dolresource', (int) $preference->resource_id, dol_now(), dol_time_plus_duree(dol_now(), 90, 'd'), $duration, $capacityUsed, $maximumCapacity);
+					if ($slot) {
+						$dateStart = $slot['date_start'];
+						$dateEnd = $slot['date_end'];
+					}
+				}
+				if ($needsAutomaticSlot && (empty($dateStart) || empty($dateEnd))) {
+					continue;
+				}
+				if (!$isConfirmed || (empty($dateStart) || empty($dateEnd)) || $manager->canReserve('dolresource', (int) $preference->resource_id, $dateStart, $dateEnd, $capacityUsed, $maximumCapacity)) {
+					$selected = $preference;
+					$selected->capacity_used = $capacityUsed;
+					$selected->assignment_start = $dateStart;
+					$selected->assignment_end = $dateEnd;
+					break;
+				}
+			}
+			if (!$selected) {
+				if (empty($alternatives[0]->mandatory)) {
+					continue;
+				}
+				$langs->load('resource');
+				$this->errors[] = $langs->trans('NoResourceAvailableForServiceLine');
+				return -1;
+			}
+			if (!empty($selected->simultaneous) && empty($commonStart) && !empty($selected->assignment_start)) {
+				$commonStart = $selected->assignment_start;
+				$commonEnd = $selected->assignment_end;
+			}
+			$sql = 'INSERT INTO '.MAIN_DB_PREFIX.'element_resources (';
+			$sql .= 'element_id, element_type, resource_id, resource_type, busy, mandatory, position, relation_kind, resource_role, requirement_group,';
+			$sql .= ' users_per_service_unit, service_quantity, service_duration, capacity_used, date_start, date_end, reservation_status, fk_user_create';
+			$sql .= ') VALUES (';
+			$sql .= ((int) $line->rowid).", '".$this->db->escape($elementType)."', ".((int) $selected->resource_id).", 'dolresource', 1, ".(!empty($selected->mandatory) ? 1 : 0).", ".((int) $selected->position).", 'assignment', '";
+			$sql .= $this->db->escape($selected->resource_role ?: 'capacity')."', ".(!empty($selected->requirement_group) ? "'".$this->db->escape($selected->requirement_group)."'" : 'NULL').', ';
+			$sql .= price2num($selected->users_per_service_unit, 'MS').', '.price2num($line->qty, 'MS').', ';
+			$sql .= (!empty($line->service_duration) ? "'".$this->db->escape($line->service_duration)."'" : 'NULL').', '.price2num($selected->capacity_used, 'MS').', ';
+			$sql .= (!empty($selected->assignment_start) ? "'".$this->db->escape($selected->assignment_start)."'" : 'NULL').', ';
+			$sql .= (!empty($selected->assignment_end) ? "'".$this->db->escape($selected->assignment_end)."'" : 'NULL').", '".($isConfirmed ? 'confirmed' : 'provisional')."', ".((int) $user->id).')';
+			if (!$this->db->query($sql)) {
+				$this->errors[] = $this->db->lasterror();
+				return -1;
 			}
 		}
-
-		if (!$selected) {
-			$langs->load('resource');
-			$this->errors[] = $langs->trans('NoResourceAvailableForServiceLine');
-			return -1;
-		}
-
-		$sql = 'INSERT INTO '.MAIN_DB_PREFIX.'element_resources (';
-		$sql .= 'element_id, element_type, resource_id, resource_type, busy, mandatory, position,';
-		$sql .= ' users_per_service_unit, service_quantity, service_duration, capacity_used, date_start, date_end, reservation_status, fk_user_create';
-		$sql .= ') VALUES (';
-		$sql .= ((int) $line->rowid).", '".$this->db->escape($elementType)."', ".((int) $selected->resource_id).", 'dolresource', 0, 0, ".((int) $selected->position).', ';
-		$sql .= price2num($selected->users_per_service_unit, 'MS').', '.price2num($line->qty, 'MS').', ';
-		$sql .= (!empty($line->service_duration) ? "'".$this->db->escape($line->service_duration)."'" : 'NULL').', '.price2num($selected->capacity_used, 'MS').', ';
-		$sql .= (!empty($line->date_start) ? "'".$this->db->escape($line->date_start)."'" : 'NULL').', ';
-		$sql .= (!empty($line->date_end) ? "'".$this->db->escape($line->date_end)."'" : 'NULL').", '".($isConfirmed ? 'confirmed' : 'provisional')."', ".((int) $user->id).')';
-
-		if (!$this->db->query($sql)) {
-			$this->errors[] = $this->db->lasterror();
-			return -1;
-		}
 		return 1;
-	}
-
-	/**
-	 * Check confirmed overlapping capacity.
-	 *
-	 * @param object $resource Preference and resource capacity
-	 * @param float $capacityUsed Requested capacity
-	 * @param string|null $dateStart Start date
-	 * @param string|null $dateEnd End date
-	 * @return bool
-	 */
-	private function hasCapacity($resource, $capacityUsed, $dateStart, $dateEnd)
-	{
-		$maximum = (float) $resource->max_users;
-		if ($maximum <= 0 || $capacityUsed > $maximum) {
-			return false;
-		}
-
-		$sql = 'SELECT COALESCE(SUM(capacity_used), 0) as occupied';
-		$sql .= ' FROM '.MAIN_DB_PREFIX.'element_resources';
-		$sql .= ' WHERE resource_id = '.((int) $resource->resource_id);
-		$sql .= " AND resource_type = 'dolresource'";
-		$sql .= " AND reservation_status = 'confirmed'";
-		if (!empty($dateStart)) {
-			$sql .= " AND (date_end IS NULL OR date_end >= '".$this->db->escape($dateStart)."')";
-		}
-		if (!empty($dateEnd)) {
-			$sql .= " AND (date_start IS NULL OR date_start <= '".$this->db->escape($dateEnd)."')";
-		}
-		$resql = $this->db->query($sql);
-		$occupied = 0.0;
-		if ($resql && ($obj = $this->db->fetch_object($resql))) {
-			$occupied = (float) $obj->occupied;
-		}
-
-		return ($occupied + $capacityUsed) <= $maximum;
 	}
 }
