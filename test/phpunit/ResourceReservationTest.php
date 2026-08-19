@@ -16,10 +16,10 @@ $documentRoot = is_file(dirname(__FILE__).'/../../htdocs/master.inc.php')
 require_once $documentRoot.'/master.inc.php';
 require_once $documentRoot.'/resource/class/dolresource.class.php';
 require_once $documentRoot.'/resource/class/resourcereservationmanager.class.php';
-require_once $documentRoot.'/custom/recursos-beta-br4ito/class/recursosbetabr4itosupplyrequestmanager.class.php';
+require_once $documentRoot.'/custom/recursos-beta-br4ito/class/resourceexternalavailabilitymanager.class.php';
 require_once $documentRoot.'/resource/core/triggers/interface_99_modResource_ResourceReservations.class.php';
-require_once $documentRoot.'/custom/recursos-beta-br4ito/core/triggers/interface_98_modRecursosBetaBr4ito_RecursosBetaBr4itoTriggers.class.php';
-require_once $documentRoot.'/custom/recursos-beta-br4ito/core/triggers/interface_100_modRecursosBetaBr4ito_RecursosBetaBr4itoRequestTriggers.class.php';
+require_once $documentRoot.'/custom/recursos-beta-br4ito/core/triggers/interface_98_modResourceExternalAvailability_ExternalAvailabilityTriggers.class.php';
+require_once $documentRoot.'/custom/recursos-beta-br4ito/core/triggers/interface_100_modResourceExternalAvailability_ExternalAvailabilityRequestTriggers.class.php';
 require_once $documentRoot.'/bookcal/class/bookcalavailabilityprovider.class.php';
 
 if (empty($user->id)) {
@@ -40,10 +40,10 @@ class ResourceReservationTest extends TestCase
 	/** @var InterfaceResourceReservations */
 	private $trigger;
 
-	/** @var InterfaceRecursosBetaBr4itoTriggers */
+	/** @var InterfaceExternalAvailabilityTriggers */
 	private $unknownTrigger;
 
-	/** @var InterfaceRecursosBetaBr4itoRequestTriggers */
+	/** @var InterfaceExternalAvailabilityRequestTriggers */
 	private $unknownRequestTrigger;
 
 	/** @var int */
@@ -72,9 +72,9 @@ class ResourceReservationTest extends TestCase
 			self::assertEmpty($result['errors'], implode(', ', $result['errors']));
 			$conf->setValues($db);
 		}
-		if (!isModEnabled('recursosbetabr4ito')) {
+		if (!isModEnabled('resourceexternalavailability')) {
 			require_once DOL_DOCUMENT_ROOT.'/core/lib/admin.lib.php';
-			$result = activateModule('modRecursosBetaBr4ito');
+			$result = activateModule('modResourceExternalAvailability');
 			self::assertEmpty($result['errors'], implode(', ', $result['errors']));
 			$conf->setValues($db);
 		}
@@ -91,8 +91,8 @@ class ResourceReservationTest extends TestCase
 		$this->db = $db;
 		$this->db->begin();
 		$this->trigger = new InterfaceResourceReservations($this->db);
-		$this->unknownTrigger = new InterfaceRecursosBetaBr4itoTriggers($this->db);
-		$this->unknownRequestTrigger = new InterfaceRecursosBetaBr4itoRequestTriggers($this->db);
+		$this->unknownTrigger = new InterfaceExternalAvailabilityTriggers($this->db);
+		$this->unknownRequestTrigger = new InterfaceExternalAvailabilityRequestTriggers($this->db);
 
 		$this->thirdPartyId = $this->insert('societe', array(
 			'nom' => 'PHPUnit Resource Reservation',
