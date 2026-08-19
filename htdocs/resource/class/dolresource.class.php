@@ -76,6 +76,10 @@ class Dolresource extends CommonObject
 	public $allow_overflow = 0;
 	/** @var ?float Type-specific metric value */
 	public $metric_value;
+	/** @var ?float Maximum payload weight in kilograms for volume resources */
+	public $max_payload_weight;
+	/** @var ?string Operational location used for resource matching */
+	public $operational_location;
 	/** @var int Cooldown blocking time after use, in minutes */
 	public $cooldown_minutes = 0;
 	/** @var string Resource type capacity model */
@@ -192,6 +196,9 @@ class Dolresource extends CommonObject
 		if ($this->capacity_mode !== 'custom' && $this->capacity_mode !== 'volume') {
 			$this->metric_value = null;
 		}
+		if ($this->capacity_mode !== 'volume') {
+			$this->max_payload_weight = null;
+		}
 		if (!$this->supports_cooldown) {
 			$this->cooldown_minutes = 0;
 		}
@@ -226,6 +233,8 @@ class Dolresource extends CommonObject
 			$this->max_users,
 			$this->allow_overflow,
 			$this->metric_value,
+			$this->max_payload_weight,
+			$this->operational_location,
 			$this->cooldown_minutes,
 			$this->url,
 			$this->fk_code_type_resource,
@@ -253,6 +262,8 @@ class Dolresource extends CommonObject
 		$sql .= "max_users,";
 		$sql .= "allow_overflow,";
 		$sql .= "metric_value,";
+		$sql .= "max_payload_weight,";
+		$sql .= "operational_location,";
 		$sql .= "cooldown_minutes,";
 		$sql .= "url,";
 		$sql .= "fk_code_type_resource,";
@@ -270,6 +281,8 @@ class Dolresource extends CommonObject
 			} elseif ($key === 11) {
 				$sql .= ' '.(isset($value) && $value !== '' ? price2num($value, 'MS') : 'NULL').',';
 			} elseif ($key === 12) {
+				$sql .= ' '.(isset($value) && $value !== '' ? price2num($value, 'MS') : 'NULL').',';
+			} elseif ($key === 14) {
 				$sql .= ' '.max(0, (int) $value).',';
 			} else {
 				$sql .= " " . (!empty($value) ? "'" . $this->db->escape($value) . "'" : 'NULL') . ",";
@@ -350,6 +363,8 @@ class Dolresource extends CommonObject
 		$sql .= " t.max_users,";
 		$sql .= " t.allow_overflow,";
 		$sql .= " t.metric_value,";
+		$sql .= " t.max_payload_weight,";
+		$sql .= " t.operational_location,";
 		$sql .= " t.cooldown_minutes,";
 		$sql .= " t.url,";
 		$sql .= " t.fk_code_type_resource,";
@@ -388,6 +403,8 @@ class Dolresource extends CommonObject
 				$this->max_users = $obj->max_users;
 				$this->allow_overflow = (int) $obj->allow_overflow;
 				$this->metric_value = isset($obj->metric_value) ? (float) $obj->metric_value : null;
+				$this->max_payload_weight = isset($obj->max_payload_weight) ? (float) $obj->max_payload_weight : null;
+				$this->operational_location = $obj->operational_location;
 				$this->cooldown_minutes = (int) $obj->cooldown_minutes;
 				$this->url = $obj->url;
 				$this->fk_code_type_resource = $obj->fk_code_type_resource;
@@ -459,6 +476,9 @@ class Dolresource extends CommonObject
 		if (isset($this->email)) {
 			$this->email = trim($this->email);
 		}
+		if (isset($this->operational_location)) {
+			$this->operational_location = trim($this->operational_location);
+		}
 		if (isset($this->url)) {
 			$this->url = trim($this->url);
 		}
@@ -491,6 +511,8 @@ class Dolresource extends CommonObject
 		$sql .= " max_users=".(isset($this->max_users) ? (int) $this->max_users : "null").",";
 		$sql .= " allow_overflow=".(!empty($this->allow_overflow) ? 1 : 0).",";
 		$sql .= " metric_value=".(isset($this->metric_value) ? price2num($this->metric_value, 'MS') : "null").",";
+		$sql .= " max_payload_weight=".(isset($this->max_payload_weight) ? price2num($this->max_payload_weight, 'MS') : "null").",";
+		$sql .= " operational_location=".(isset($this->operational_location) ? "'".$this->db->escape($this->operational_location)."'" : "null").",";
 		$sql .= " cooldown_minutes=".max(0, (int) $this->cooldown_minutes).",";
 		$sql .= " url=".(isset($this->url) ? "'".$this->db->escape($this->url)."'" : "null").",";
 		$sql .= " fk_code_type_resource=".(isset($this->fk_code_type_resource) ? "'".$this->db->escape($this->fk_code_type_resource)."'" : "null").",";

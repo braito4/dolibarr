@@ -50,3 +50,5 @@ ResourceCapacityModeVolume=Volume
 ResourceMetricLabel=Metric label
 ResourceMetricUnit=Metric unit
 ResourceSupportsCooldown=Supports cooldown
+ResourceMaxPayloadWeight=Maximum payload weight
+ResourceOperationalLocation=Operational location
