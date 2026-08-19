@@ -531,7 +531,7 @@ class InterfaceResourceReservations extends DolibarrTriggers
 	 * @param float    $serviceQuantity Service quantity
 	 * @param string   $reservationStatus Reservation status
 	 * @param User     $user           Acting user
-	 * @return bool
+	 * @return int|false Assignment row id, or false on error
 	 */
 	private function insertAssignment($elementType, $line, $selected, $serviceQuantity, $reservationStatus, User $user)
 	{
