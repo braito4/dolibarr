@@ -61,9 +61,13 @@ $description			= GETPOST('description', 'restricthtml');
 $phone					= GETPOST('phone', 'alpha');
 $email					= GETPOST('email', 'alpha');
 $max_users				= GETPOSTINT('max_users');
+$allow_overflow			= GETPOSTINT('allow_overflow');
+$metric_value			= GETPOST('metric_value', 'alpha');
+$cooldown_minutes		= GETPOSTINT('cooldown_minutes');
 $url					= GETPOST('url', 'alpha');
 $confirm				= GETPOST('confirm', 'aZ09');
 $fk_code_type_resource	= GETPOST('fk_code_type_resource', 'aZ09');
+$status                 = GETPOSTISSET('status') ? GETPOSTINT('status') : Dolresource::STATUS_FREE;
 
 // Protection if external user
 if ($user->socid > 0) {
@@ -85,6 +89,8 @@ $result = restrictedArea($user, 'resource', $object->id, 'resource');
 
 $permissiontoadd = $user->hasRight('resource', 'write'); // Used by the include of actions_addupdatedelete.inc.php and actions_lineupdown.inc.php
 $permissiontodelete = $user->hasRight('resource', 'delete');
+$formconfirm = '';
+$form = new Form($db);
 
 
 /*
@@ -128,8 +134,12 @@ if (empty($reshook)) {
 				$object->phone					= $phone;
 				$object->email					= $email;
 				$object->max_users				= $max_users;
+				$object->allow_overflow			= $allow_overflow ? 1 : 0;
+				$object->metric_value			= ($metric_value !== '' ? (float) price2num($metric_value, 'MS') : null);
+				$object->cooldown_minutes		= max(0, $cooldown_minutes);
 				$object->url					= $url;
 				$object->fk_code_type_resource	= $fk_code_type_resource;
+				$object->status                 = $status;
 
 				// Fill array 'array_options' with data from add form
 				$ret = $extrafields->setOptionalsFromPost(null, $object);
@@ -178,8 +188,12 @@ if (empty($reshook)) {
 				$object->phone					= $phone;
 				$object->email					= $email;
 				$object->max_users				= $max_users;
+				$object->allow_overflow			= $allow_overflow ? 1 : 0;
+				$object->metric_value			= ($metric_value !== '' ? (float) price2num($metric_value, 'MS') : null);
+				$object->cooldown_minutes		= max(0, $cooldown_minutes);
 				$object->url					= $url;
 				$object->fk_code_type_resource  = $fk_code_type_resource;
+				$object->status = $status;
 
 				// Fill array 'array_options' with data from add form
 				$ret = $extrafields->setOptionalsFromPost(null, $object, '@GETPOSTISSET');
@@ -187,7 +201,7 @@ if (empty($reshook)) {
 					$error++;
 				}
 
-				$result = $object->update($user);
+				$result = !$error ? $object->update($user) : -1;
 				if ($result > 0) {
 					if ($oldref != $ref) {
 						// We renamed the ref so we must change the directory too
@@ -210,7 +224,7 @@ if (empty($reshook)) {
 		}
 
 		if ($error) {
-			$action = 'edit';
+			$action = empty($formconfirm) ? 'edit' : '';
 		}
 	}
 
@@ -237,11 +251,16 @@ if (empty($reshook)) {
  * View
  */
 
+// A resource card without an id is necessarily a creation form. This also
+// protects country/state auto-submits from trying to fetch an empty object.
+if ($id <= 0 && empty($ref) && $action !== 'create' && $action !== 'add') {
+	$action = 'create';
+}
+
 $title = $langs->trans($action == 'create' ? 'AddResource' : 'ResourceSingular');
 $help_url = '';
 llxHeader('', $title, $help_url, '', 0, 0, '', '', '', 'mod-resource page-card');
 
-$form = new Form($db);
 $formresource = new FormResource($db);
 
 if ($action == 'create' || $object->fetch($id, $ref) > 0) {
@@ -250,7 +269,7 @@ if ($action == 'create' || $object->fetch($id, $ref) > 0) {
 		print dol_get_fiche_head();
 	} else {
 		$head = resource_prepare_head($object);
-		print dol_get_fiche_head($head, 'resource', $title, -1, 'resource', 0, '', '', 0, '', ($action == 'edit' ? 0 : 1));
+		print dol_get_fiche_head($head, 'resource', $title, -1, 'resource');
 	}
 
 	if ($action == 'create' || $action == 'edit') {
@@ -263,7 +282,7 @@ if ($action == 'create' || $object->fetch($id, $ref) > 0) {
 			print '$(document).ready(function () {
                         $("#selectcountry_id").change(function() {
 							console.log("selectcountry_id change");
-                        	document.formresource.action.value="' . ($action == 'create' ? 'create' : 'edit') . '";
+							document.formresource.elements["action"].value="' . ($action == 'create' ? 'create' : 'edit') . '";
                         	document.formresource.submit();
                         });
                      });';
@@ -271,9 +290,15 @@ if ($action == 'create' || $object->fetch($id, $ref) > 0) {
 		}
 
 
-		// Create/Edit object
+		// Resource-type capabilities drive the fields displayed below.
+		$typeModels = array();
+		$resqlModels = $db->query('SELECT code, capacity_mode, metric_label, metric_unit, supports_cooldown FROM '.$db->prefix().'c_type_resource WHERE active = 1');
+		while ($resqlModels && ($typeModel = $db->fetch_object($resqlModels))) {
+			$typeModels[$typeModel->code] = array('capacity_mode' => $typeModel->capacity_mode, 'metric_label' => $typeModel->metric_label, 'metric_unit' => $typeModel->metric_unit, 'supports_cooldown' => (int) $typeModel->supports_cooldown);
+		}
 
-		print '<form enctype="multipart/form-data" action="'.$_SERVER["PHP_SELF"].'?id='.$id.'" method="POST" name="formresource">';
+		$formAction = $_SERVER["PHP_SELF"].($action === 'edit' && $id > 0 ? '?id='.((int) $id) : '');
+		print '<form enctype="multipart/form-data" action="'.$formAction.'" method="POST" name="formresource">';
 		print '<input type="hidden" name="token" value="'.newToken().'">';
 		print '<input type="hidden" name="action" value="'.($action == "create" ? "add" : "update").'">';
 
@@ -287,6 +312,15 @@ if ($action == 'create' || $object->fetch($id, $ref) > 0) {
 		print '<tr><td>'.$langs->trans("ResourceType").'</td>';
 		print '<td>';
 		$formresource->select_types_resource($object->fk_code_type_resource, 'fk_code_type_resource', '', 2, 0, 0, 0, 1, 'minwidth200');
+		print '</td></tr>';
+
+		// Manual availability status. Busy is calculated from reservations and capacity.
+		$statusOptions = Dolresource::getStatusArray();
+		if ($action == 'create') {
+			unset($statusOptions[Dolresource::STATUS_UNKNOWN]);
+		}
+		print '<tr><td>'.$langs->trans('Status').'</td><td>';
+		print $form->selectarray('status', $statusOptions, GETPOSTISSET('status') ? $status : $object->status, 0, 0, 0, '', 0, 0, 0, '', 'minwidth200');
 		print '</td></tr>';
 
 		// Description
@@ -359,11 +393,21 @@ if ($action == 'create' || $object->fetch($id, $ref) > 0) {
 		print '</tr>';
 
 		// Max users
-		print '<tr><td>'.$form->editfieldkey('MaxUsers', 'max_users', '', $object, 0, 'string', '', 0, 0, 'id', $langs->trans('MaxUsersResourceDesc')).'</td>';
+		print '<tr class="resource-model-users"><td>'.$form->editfieldkey('MaxUsers', 'max_users', '', $object, 0, 'string', '', 0, 0, 'id', $langs->trans('MaxUsersResourceDesc')).'</td>';
 		print '<td>';
 		print img_picto('', 'object_user', 'class="pictofixedwidth"');
 		print '<input type="text" class="width75 right" name="max_users" id="max_users" value="'.(GETPOSTISSET('max_users') ? GETPOST('max_users', 'int') : ($object->max_users > 0 ? $object->max_users : '')).'"></td>';
 		print '</tr>';
+
+		print '<tr class="resource-model-users"><td>'.$form->editfieldkey('AllowResourceOverflow', 'allow_overflow', '', $object, 0, 'string', '', 0, 0, 'id', $langs->trans('AllowResourceOverflowHelp')).'</td>';
+		print '<td>'.$form->selectyesno('allow_overflow', GETPOSTISSET('allow_overflow') ? $allow_overflow : $object->allow_overflow, 1).'</td>';
+		print '</tr>';
+
+		print '<tr class="resource-model-custom"><td><span id="resource_metric_label">'.$langs->trans('ResourceMetricValue').'</span></td><td>';
+		print '<input type="text" class="width100 right" name="metric_value" value="'.dol_escape_htmltag(GETPOSTISSET('metric_value') ? $metric_value : $object->metric_value).'"> <span id="resource_metric_unit"></span></td></tr>';
+		print '<tr class="resource-model-cooldown"><td>'.$langs->trans('ResourceCooldownMinutes').'</td><td>';
+		print '<input type="number" min="0" class="width75" name="cooldown_minutes" value="'.(GETPOSTISSET('cooldown_minutes') ? $cooldown_minutes : (int) $object->cooldown_minutes).'"> '.$langs->trans('Minutes').'</td></tr>';
+		print '<script>jQuery(function(){var models='.json_encode($typeModels).'; function toggleModelFields(selector, visible){jQuery(selector).toggle(visible).find(":input").prop("disabled", !visible);} function applyResourceModel(){var model=models[jQuery("#selectfk_code_type_resource").val()] || {capacity_mode:"none",supports_cooldown:0}; toggleModelFields(".resource-model-users", model.capacity_mode === "users"); toggleModelFields(".resource-model-custom", model.capacity_mode === "custom"); toggleModelFields(".resource-model-cooldown", !!model.supports_cooldown); jQuery("#resource_metric_label").text(model.metric_label || '.json_encode($langs->transnoentities('ResourceMetricValue')).'); jQuery("#resource_metric_unit").text(model.metric_unit || "");} jQuery("#selectfk_code_type_resource").on("change", applyResourceModel); applyResourceModel();});</script>';
 
 		// URL
 		print '<tr><td>'.$form->editfieldkey('URL', 'url', '', $object, 0).'</td>';
@@ -391,8 +435,6 @@ if ($action == 'create' || $object->fetch($id, $ref) > 0) {
 
 		print '</form>';
 	} else {
-		$formconfirm = '';
-
 		// Confirm deleting resource line
 		if ($action == 'delete' || ($conf->use_javascript_ajax && empty($conf->dol_use_jmobile))) {
 			$formconfirm = $form->formconfirm($_SERVER["PHP_SELF"]."?id=".$object->id, $langs->trans("DeleteResource"), $langs->trans("ConfirmDeleteResource"), "confirm_delete_resource", '', 0, "action-delete");
@@ -420,6 +462,12 @@ if ($action == 'create' || $object->fetch($id, $ref) > 0) {
 		print '</td>';
 		print '</tr>';
 
+		// Manual availability status
+		print '<tr>';
+		print '<td>'.$langs->trans('Status').'</td>';
+		print '<td>'.$object->getLibStatut(4).'</td>';
+		print '</tr>';
+
 		// Description
 		print '<tr>';
 		print '<td>'.$langs->trans("ResourceFormLabel_description").'</td>';
@@ -428,13 +476,17 @@ if ($action == 'create' || $object->fetch($id, $ref) > 0) {
 		print '</td>';
 		print '</tr>';
 
-		// Max users
-		print '<tr>';
-		print '<td>'.$langs->trans("MaxUsers").'</td>';
-		print '<td>';
-		print $object->max_users > 0 ? $object->max_users : '';
-		print '</td>';
-		print '</tr>';
+		if ($object->capacity_mode === 'users') {
+			print '<tr><td>'.$langs->trans("MaxUsers").'</td><td>'.($object->max_users > 0 ? $object->max_users : '').'</td></tr>';
+			print '<tr><td>'.$langs->trans('AllowResourceOverflow').'</td><td>'.yn($object->allow_overflow).'</td></tr>';
+		}
+
+		if ($object->metric_value !== null) {
+			print '<tr><td>'.dol_escape_htmltag($object->metric_label ?: $langs->trans('ResourceMetricValue')).'</td><td>'.price($object->metric_value).' '.dol_escape_htmltag($object->metric_unit).'</td></tr>';
+		}
+		if ($object->cooldown_minutes > 0) {
+			print '<tr><td>'.$langs->trans('ResourceCooldownMinutes').'</td><td>'.((int) $object->cooldown_minutes).' '.$langs->trans('Minutes').'</td></tr>';
+		}
 
 		// Other attributes
 		include DOL_DOCUMENT_ROOT.'/core/tpl/extrafields_view.tpl.php';
