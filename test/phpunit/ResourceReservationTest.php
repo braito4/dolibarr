@@ -776,6 +776,74 @@ class ResourceReservationTest extends TestCase
 		$this->assertSame('2026-08-20 09:00', $provider->formatLocalTimestamp($calendarId, $slotStart));
 	}
 
+	/** BookCal skips the nonexistent hour when the resource calendar enters daylight saving time. */
+	public function testBookCalSkipsNonexistentSpringClockHour(): void
+	{
+		global $user;
+		$calendarId = $this->insert('bookcal_calendar', array(
+			'entity' => 1,
+			'ref' => 'PHPUNIT-BOOKCAL-SPRING-DST',
+			'label' => 'PHPUnit spring DST',
+			'timezone' => 'Europe/Madrid',
+			'date_creation' => '2026-08-19 10:00:00',
+			'fk_user_creat' => $user->id,
+			'status' => 1,
+			'type' => 3,
+			'visibility' => 1,
+		));
+		$this->insert('bookcal_availabilities', array(
+			'label' => 'Spring transition',
+			'date_creation' => '2026-08-19 10:00:00',
+			'fk_user_creat' => $user->id,
+			'status' => 1,
+			'start' => '2026-03-29',
+			'end' => '2026-03-29',
+			'duration' => 30,
+			'startHour' => 1,
+			'endHour' => 5,
+			'fk_bookcal_calendar' => $calendarId,
+		));
+		$provider = new BookCalAvailabilityProvider($this->db);
+		$dayStart = gmmktime(0, 0, 0, 3, 29, 2026);
+
+		$this->assertSame(array('01:00', '01:30', '03:00', '03:30', '04:00', '04:30'), array_keys($provider->getSlots($calendarId, $dayStart)));
+		$this->assertSame(0, $provider->getLocalTimestamp($calendarId, $dayStart, '02:00'));
+	}
+
+	/** BookCal hides a repeated local hour because the form cannot carry its UTC offset. */
+	public function testBookCalHandlesRepeatedAutumnClockHour(): void
+	{
+		global $user;
+		$calendarId = $this->insert('bookcal_calendar', array(
+			'entity' => 1,
+			'ref' => 'PHPUNIT-BOOKCAL-AUTUMN-DST',
+			'label' => 'PHPUnit autumn DST',
+			'timezone' => 'Europe/Madrid',
+			'date_creation' => '2026-08-19 10:00:00',
+			'fk_user_creat' => $user->id,
+			'status' => 1,
+			'type' => 3,
+			'visibility' => 1,
+		));
+		$this->insert('bookcal_availabilities', array(
+			'label' => 'Autumn transition',
+			'date_creation' => '2026-08-19 10:00:00',
+			'fk_user_creat' => $user->id,
+			'status' => 1,
+			'start' => '2026-10-25',
+			'end' => '2026-10-25',
+			'duration' => 90,
+			'startHour' => 1,
+			'endHour' => 5,
+			'fk_bookcal_calendar' => $calendarId,
+		));
+		$provider = new BookCalAvailabilityProvider($this->db);
+		$dayStart = gmmktime(0, 0, 0, 10, 25, 2026);
+
+		$this->assertSame(array('01:00', '03:00'), array_keys($provider->getSlots($calendarId, $dayStart)));
+		$this->assertSame(0, $provider->getLocalTimestamp($calendarId, $dayStart, '02:30'));
+	}
+
 	/**
 	 * An end hour equal to or before the start hour denotes the following day.
 	 *

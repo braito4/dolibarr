@@ -84,7 +84,6 @@ class BookCalAvailabilityProvider
 		$dayParts = dol_getdate($dayStart);
 		$dayKey = sprintf('%04d-%02d-%02d', $dayParts['year'], $dayParts['mon'], $dayParts['mday']);
 		$timezone = new DateTimeZone($this->getTimezone($calendarId));
-		$localDayStart = (new DateTimeImmutable($dayKey.' 00:00:00', $timezone))->getTimestamp();
 		$sql = 'SELECT ba.duration, ba.startHour, ba.endHour, ba.start, ba.end';
 		$sql .= ' FROM '.MAIN_DB_PREFIX.'bookcal_availabilities ba';
 		$sql .= ' INNER JOIN '.MAIN_DB_PREFIX.'bookcal_calendar bc ON bc.rowid = ba.fk_bookcal_calendar';
@@ -98,14 +97,20 @@ class BookCalAvailabilityProvider
 			}
 			$startHour = max(0, min(24, (int) $range->startHour));
 			$endHour = max(0, min(24, (int) $range->endHour));
-			$cursor = $localDayStart + ($startHour * 3600);
-			$limit = $localDayStart + ($endHour * 3600);
+			$opening = (new DateTimeImmutable($dayKey.' 00:00:00', $timezone))->setTime($startHour, 0);
+			$closing = (new DateTimeImmutable($dayKey.' 00:00:00', $timezone))->setTime($endHour, 0);
 			if ($endHour <= $startHour) {
-				$limit += 86400;
+				$closing = $closing->modify('+1 day');
 			}
+			$cursor = $opening->getTimestamp();
+			$limit = $closing->getTimestamp();
 			$duration = (int) $range->duration;
 			while ($cursor + ($duration * 60) <= $limit) {
 				$key = (new DateTimeImmutable('@'.$cursor))->setTimezone($timezone)->format('H:i');
+				if ($this->getUnambiguousLocalTimestamp($dayKey, $key, $timezone) !== $cursor) {
+					$cursor += $duration * 60;
+					continue;
+				}
 				$available = $this->isAvailable($calendarId, $cursor, $cursor + ($duration * 60));
 				$slots[$key] = $available ? $duration : -$duration;
 				$cursor += $duration * 60;
@@ -137,17 +142,18 @@ class BookCalAvailabilityProvider
 		$timezone = new DateTimeZone($this->getTimezone($calendarId));
 		$localDate = (new DateTimeImmutable('@'.$dateStart))->setTimezone($timezone);
 		$dayKey = $localDate->format('Y-m-d');
-		$dayStart = (new DateTimeImmutable($dayKey.' 00:00:00', $timezone))->getTimestamp();
 		while ($resql && ($range = $this->db->fetch_object($resql))) {
 			$rangeStart = substr((string) $range->start, 0, 10);
 			$rangeEnd = substr((string) $range->end, 0, 10);
 			$startHour = max(0, min(24, (int) $range->startHour));
 			$endHour = max(0, min(24, (int) $range->endHour));
-			$opening = $dayStart + ($startHour * 3600);
-			$closing = $dayStart + ($endHour * 3600);
+			$openingDate = (new DateTimeImmutable($dayKey.' 00:00:00', $timezone))->setTime($startHour, 0);
+			$closingDate = (new DateTimeImmutable($dayKey.' 00:00:00', $timezone))->setTime($endHour, 0);
 			if ($endHour <= $startHour) {
-				$closing += 86400;
+				$closingDate = $closingDate->modify('+1 day');
 			}
+			$opening = $openingDate->getTimestamp();
+			$closing = $closingDate->getTimestamp();
 			$duration = (int) round(($dateEnd - $dateStart) / 60);
 			if ($dayKey >= $rangeStart && $dayKey <= $rangeEnd && $dateStart >= $opening && $dateEnd <= $closing && $duration === (int) $range->duration) {
 				$insideOpeningRange = true;
@@ -184,11 +190,42 @@ class BookCalAvailabilityProvider
 		$dayParts = dol_getdate($dayStart);
 		$dayKey = sprintf('%04d-%02d-%02d', $dayParts['year'], $dayParts['mon'], $dayParts['mday']);
 		$timezone = new DateTimeZone($this->getTimezone($calendarId));
-		$date = DateTimeImmutable::createFromFormat('!Y-m-d H:i', $dayKey.' '.$clockTime, $timezone);
-		if (!($date instanceof DateTimeImmutable) || $date->format('H:i') !== $clockTime) {
+		return $this->getUnambiguousLocalTimestamp($dayKey, $clockTime, $timezone);
+	}
+
+	/**
+	 * Convert an unambiguous local value to its absolute timestamp.
+	 *
+	 * @param string       $dayKey   Local day formatted as Y-m-d
+	 * @param string       $clockTime Local time formatted as H:i
+	 * @param DateTimeZone $timezone Calendar timezone
+	 * @return int Zero when the local value is invalid or repeated
+	 */
+	private function getUnambiguousLocalTimestamp($dayKey, $clockTime, DateTimeZone $timezone)
+	{
+		$localValue = $dayKey.' '.$clockTime;
+		$date = DateTimeImmutable::createFromFormat('!Y-m-d H:i', $localValue, $timezone);
+		if (!($date instanceof DateTimeImmutable) || $date->format('Y-m-d H:i') !== $localValue) {
 			return 0;
 		}
-		return $date->getTimestamp();
+		$localAsUtc = gmmktime(
+			(int) substr($clockTime, 0, 2),
+			(int) substr($clockTime, 3, 2),
+			0,
+			(int) substr($dayKey, 5, 2),
+			(int) substr($dayKey, 8, 2),
+			(int) substr($dayKey, 0, 4)
+		);
+		$matches = array();
+		$transitions = $timezone->getTransitions($date->getTimestamp() - 10800, $date->getTimestamp() + 10800);
+		foreach ($transitions as $transition) {
+			$candidate = $localAsUtc - (int) $transition['offset'];
+			$candidateValue = (new DateTimeImmutable('@'.$candidate))->setTimezone($timezone)->format('Y-m-d H:i');
+			if ($candidateValue === $localValue) {
+				$matches[$candidate] = true;
+			}
+		}
+		return count($matches) === 1 ? (int) array_key_first($matches) : 0;
 	}
 
 	/**
