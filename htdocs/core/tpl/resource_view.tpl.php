@@ -43,6 +43,7 @@ if (empty($conf) || !is_object($conf)) {
 @phan-var-force array<array{rowid:int,resource_id:int,resource_type:string,busy:int<0,1>,mandatory:int<0,1>,position:int,users_per_service_unit:float,relation_kind:string,resource_role:string,requirement_group:?string,quantity_required:float,duration_base:int,duration_per_unit:int,setup_duration:int,cleanup_duration:int,scheduling_mode:string,start_input_mode:string,end_input_mode:string,time_precision:string,simultaneous:int<0,1>,allow_split:int<0,1>}> $linked_resources
 ';
 
+global $langs;
 
 $form = new Form($db);
 $isProductResourceList = ($element == 'product' || $element == 'service');
@@ -113,7 +114,7 @@ if ((array) $linked_resources && count($linked_resources) > 0) {
 				print $resourceHelpLabel('DurationPerUnitMinutes').' <input type="number" min="0" class="width50" name="duration_per_unit" value="'.$linked_resource['duration_per_unit'].'"><br>';
 				print $resourceHelpLabel('SetupDurationMinutes').' <input type="number" min="0" class="width50" name="setup_duration" value="'.$linked_resource['setup_duration'].'"> ';
 				print $resourceHelpLabel('CleanupDurationMinutes').' <input type="number" min="0" class="width50" name="cleanup_duration" value="'.$linked_resource['cleanup_duration'].'"> ';
-				print $resourceHelpLabel('RequirementGroup').' <input type="text" class="width75" name="requirement_group" value="'.dol_escape_htmltag($linked_resource['requirement_group']).'"> ';
+				print $resourceHelpLabel('RequirementGroup').' <input type="text" class="width75" name="requirement_group" value="'.dol_escape_htmltag($linked_resource['requirement_group'] ?? '').'"> ';
 				print '<label>'.$resourceHelpLabel('Mandatory').' <input type="checkbox" name="mandatory" value="1"'.($linked_resource['mandatory'] ? ' checked' : '').'></label> ';
 				print '<label>'.$resourceHelpLabel('SimultaneousRequirement').' <input type="checkbox" name="simultaneous" value="1"'.($linked_resource['simultaneous'] ? ' checked' : '').'></label> ';
 				print '<label>'.$resourceHelpLabel('AllowSplitRequirement').' <input type="checkbox" name="allow_split" value="1"'.($linked_resource['allow_split'] ? ' checked' : '').'></label>';
