@@ -70,8 +70,8 @@ class ResourceServiceRelationTest extends TestCase
 	public function testVolumeAwarenessMetadataIsLoaded(): void
 	{
 		$sql = 'INSERT INTO '.$this->db->prefix().'element_resources';
-		$sql .= ' (element_id, element_type, resource_id, resource_type, relation_kind, context_scope, demand_source, capacity_metrics, selection_policy)';
-		$sql .= " VALUES (99102, 'service', 99203, 'dolresource', 'requirement', 'same_proposal', 'product_lines', 'volume', 'smallest_sufficient')";
+		$sql .= ' (element_id, element_type, resource_id, resource_type, relation_kind, context_scope, demand_source, capacity_metrics, required_location, selection_policy)';
+		$sql .= " VALUES (99102, 'service', 99203, 'dolresource', 'requirement', 'same_proposal', 'product_lines', 'volume_weight', 'Madrid depot', 'smallest_sufficient')";
 		$this->assertTrue((bool) $this->db->query($sql));
 
 		$requirements = (new Dolresource($this->db))->getElementResources('service', 99102, 'dolresource');
@@ -79,7 +79,8 @@ class ResourceServiceRelationTest extends TestCase
 		$this->assertCount(1, $requirements);
 		$this->assertSame('same_proposal', $requirements[0]['context_scope']);
 		$this->assertSame('product_lines', $requirements[0]['demand_source']);
-		$this->assertSame('volume', $requirements[0]['capacity_metrics']);
+		$this->assertSame('volume_weight', $requirements[0]['capacity_metrics']);
+		$this->assertSame('Madrid depot', $requirements[0]['required_location']);
 		$this->assertSame('smallest_sufficient', $requirements[0]['selection_policy']);
 	}
 }

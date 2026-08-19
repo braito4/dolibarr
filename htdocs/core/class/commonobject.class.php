@@ -6101,7 +6101,7 @@ abstract class CommonObject
 		$sql .= ", relation_kind, resource_role, requirement_group, quantity_required";
 		$sql .= ", duration_base, duration_per_unit, setup_duration, cleanup_duration";
 		$sql .= ", scheduling_mode, start_input_mode, end_input_mode, time_precision, simultaneous, allow_split";
-		$sql .= ", context_scope, demand_source, capacity_metrics, selection_policy";
+		$sql .= ", context_scope, demand_source, capacity_metrics, required_location, selection_policy";
 		$sql .= ") VALUES (";
 		$sql .= ((int) $resource_id);
 		$sql .= ", '".$this->db->escape($resource_type)."'";
@@ -6128,6 +6128,7 @@ abstract class CommonObject
 		$sql .= ", '".$this->db->escape(!empty($requirement['context_scope']) ? $requirement['context_scope'] : 'service_line')."'";
 		$sql .= ", '".$this->db->escape(!empty($requirement['demand_source']) ? $requirement['demand_source'] : 'service_quantity')."'";
 		$sql .= ", '".$this->db->escape(!empty($requirement['capacity_metrics']) ? $requirement['capacity_metrics'] : 'units')."'";
+		$sql .= ", ".(!empty($requirement['required_location']) ? "'".$this->db->escape($requirement['required_location'])."'" : 'NULL');
 		$sql .= ", '".$this->db->escape(!empty($requirement['selection_policy']) ? $requirement['selection_policy'] : 'preference_order')."'";
 		$sql .= ")";
 

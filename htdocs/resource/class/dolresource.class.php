@@ -179,6 +179,8 @@ class Dolresource extends CommonObject
 	public $demand_source = 'service_quantity';
 	/** @var string Comma-separated capacity metrics */
 	public $capacity_metrics = 'units';
+	/** @var ?string Required operational location */
+	public $required_location;
 	/** @var string Resource candidate selection policy */
 	public $selection_policy = 'preference_order';
 
@@ -661,6 +663,7 @@ class Dolresource extends CommonObject
 		$sql .= " t.context_scope,";
 		$sql .= " t.demand_source,";
 		$sql .= " t.capacity_metrics,";
+		$sql .= " t.required_location,";
 		$sql .= " t.selection_policy,";
 		$sql .= " t.fk_user_create,";
 		$sql .= " t.tms as date_modification";
@@ -699,6 +702,7 @@ class Dolresource extends CommonObject
 				$this->context_scope = $obj->context_scope;
 				$this->demand_source = $obj->demand_source;
 				$this->capacity_metrics = $obj->capacity_metrics;
+				$this->required_location = $obj->required_location;
 				$this->selection_policy = $obj->selection_policy;
 				$this->fk_user_create = $obj->fk_user_create;
 				$this->date_modification = $obj->date_modification;
@@ -975,6 +979,7 @@ class Dolresource extends CommonObject
 		$sql .= " context_scope = '".$this->db->escape($this->context_scope ?: 'service_line')."',";
 		$sql .= " demand_source = '".$this->db->escape($this->demand_source ?: 'service_quantity')."',";
 		$sql .= " capacity_metrics = '".$this->db->escape($this->capacity_metrics ?: 'units')."',";
+		$sql .= " required_location = ".(!empty($this->required_location) ? "'".$this->db->escape($this->required_location)."'" : "null").",";
 		$sql .= " selection_policy = '".$this->db->escape($this->selection_policy ?: 'preference_order')."',";
 		$sql .= " tms = ".(dol_strlen((string) $this->date_modification) != 0 ? "'".$this->db->idate($this->date_modification)."'" : 'null');
 		$sql .= " WHERE rowid=".((int) $this->id);
@@ -1020,7 +1025,7 @@ class Dolresource extends CommonObject
 	 * @param	string		$element			Element
 	 * @param	int			$element_id			Id
 	 * @param	string		$resource_type		Type
-	 * @return	array<array{rowid:int,resource_id:int,resource_type:string,busy:int<0,1>,mandatory:int<0,1>,position:int,users_per_service_unit:float,relation_kind:string,resource_role:string,requirement_group:?string,quantity_required:float,duration_base:int,duration_per_unit:int,setup_duration:int,cleanup_duration:int,scheduling_mode:string,start_input_mode:string,end_input_mode:string,time_precision:string,simultaneous:int<0,1>,allow_split:int<0,1>,context_scope:string,demand_source:string,capacity_metrics:string,selection_policy:string}>	Array of resources
+	 * @return	array<array{rowid:int,resource_id:int,resource_type:string,busy:int<0,1>,mandatory:int<0,1>,position:int,users_per_service_unit:float,relation_kind:string,resource_role:string,requirement_group:?string,quantity_required:float,duration_base:int,duration_per_unit:int,setup_duration:int,cleanup_duration:int,scheduling_mode:string,start_input_mode:string,end_input_mode:string,time_precision:string,simultaneous:int<0,1>,allow_split:int<0,1>,context_scope:string,demand_source:string,capacity_metrics:string,required_location:?string,selection_policy:string}>	Array of resources
 	 */
 	public function getElementResources(string $element, int $element_id, string $resource_type = '')
 	{
@@ -1028,7 +1033,7 @@ class Dolresource extends CommonObject
 		$sql = 'SELECT rowid, resource_id, resource_type, busy, mandatory, position, users_per_service_unit,';
 		$sql .= ' relation_kind, resource_role, requirement_group, quantity_required, duration_base, duration_per_unit,';
 		$sql .= ' setup_duration, cleanup_duration, scheduling_mode, start_input_mode, end_input_mode, time_precision, simultaneous, allow_split,';
-		$sql .= ' context_scope, demand_source, capacity_metrics, selection_policy';
+		$sql .= ' context_scope, demand_source, capacity_metrics, required_location, selection_policy';
 		$sql .= ' FROM '.MAIN_DB_PREFIX.'element_resources';
 		$sql .= " WHERE element_id=".((int) $element_id)." AND element_type='".$this->db->escape($element)."'";
 		$sql .= " AND (relation_kind IS NULL OR relation_kind = 'requirement')";
@@ -1072,6 +1077,7 @@ class Dolresource extends CommonObject
 					'context_scope' => $obj->context_scope ?: 'service_line',
 					'demand_source' => $obj->demand_source ?: 'service_quantity',
 					'capacity_metrics' => $obj->capacity_metrics ?: 'units',
+					'required_location' => $obj->required_location,
 					'selection_policy' => $obj->selection_policy ?: 'preference_order'
 				);
 				$i++;
