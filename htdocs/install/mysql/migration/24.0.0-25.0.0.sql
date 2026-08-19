@@ -97,4 +97,24 @@ UPDATE llx_c_type_resource SET capacity_mode = 'users' WHERE code = 'RES_ROOMS';
 UPDATE llx_c_type_resource SET capacity_mode = 'custom', metric_label = 'Usage value' WHERE code = 'RES_CARS';
 INSERT INTO llx_c_type_resource (code, label, capacity_mode, supports_cooldown, active) SELECT 'RES_MACHINES', 'Machinery', 'none', 1, 1 WHERE NOT EXISTS (SELECT 1 FROM llx_c_type_resource WHERE code = 'RES_MACHINES');
 
+-- Resource requirements attached to products and services
+ALTER TABLE llx_element_resources ADD COLUMN position integer DEFAULT 0;
+ALTER TABLE llx_element_resources ADD COLUMN relation_kind varchar(16) NOT NULL DEFAULT 'requirement';
+ALTER TABLE llx_element_resources ADD COLUMN resource_role varchar(16) NOT NULL DEFAULT 'capacity';
+ALTER TABLE llx_element_resources ADD COLUMN requirement_group varchar(32) DEFAULT NULL;
+ALTER TABLE llx_element_resources ADD COLUMN quantity_required real DEFAULT 1;
+ALTER TABLE llx_element_resources ADD COLUMN users_per_service_unit real DEFAULT NULL;
+ALTER TABLE llx_element_resources ADD COLUMN duration_base integer DEFAULT 0;
+ALTER TABLE llx_element_resources ADD COLUMN duration_per_unit integer DEFAULT 0;
+ALTER TABLE llx_element_resources ADD COLUMN setup_duration integer DEFAULT 0;
+ALTER TABLE llx_element_resources ADD COLUMN cleanup_duration integer DEFAULT 0;
+ALTER TABLE llx_element_resources ADD COLUMN scheduling_mode varchar(16) NOT NULL DEFAULT 'same_as_parent';
+ALTER TABLE llx_element_resources ADD COLUMN start_input_mode varchar(16) NOT NULL DEFAULT 'none';
+ALTER TABLE llx_element_resources ADD COLUMN end_input_mode varchar(16) NOT NULL DEFAULT 'none';
+ALTER TABLE llx_element_resources ADD COLUMN time_precision varchar(16) NOT NULL DEFAULT 'minute';
+ALTER TABLE llx_element_resources ADD COLUMN simultaneous smallint NOT NULL DEFAULT 1;
+ALTER TABLE llx_element_resources ADD COLUMN allow_split smallint NOT NULL DEFAULT 0;
+UPDATE llx_element_resources SET requirement_group = 'legacy_default', mandatory = 1 WHERE element_type IN ('product', 'service');
+ALTER TABLE llx_element_resources ADD INDEX idx_element_resources_requirement (element_type, element_id, relation_kind, position);
+
 -- end of migration

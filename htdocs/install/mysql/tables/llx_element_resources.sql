@@ -26,6 +26,22 @@ CREATE TABLE llx_element_resources
   resource_type	  varchar(64),		-- resource or user
   busy			  integer,
   mandatory		  integer,
+	position		  integer DEFAULT 0,
+	relation_kind	  varchar(16) NOT NULL DEFAULT 'requirement',
+	resource_role	  varchar(16) NOT NULL DEFAULT 'capacity',
+	requirement_group varchar(32) DEFAULT NULL,
+	quantity_required real DEFAULT 1,
+	users_per_service_unit real DEFAULT NULL,
+	duration_base	  integer DEFAULT 0,
+	duration_per_unit integer DEFAULT 0,
+	setup_duration	  integer DEFAULT 0,
+	cleanup_duration  integer DEFAULT 0,
+	scheduling_mode  varchar(16) NOT NULL DEFAULT 'same_as_parent',
+	start_input_mode varchar(16) NOT NULL DEFAULT 'none',
+	end_input_mode   varchar(16) NOT NULL DEFAULT 'none',
+	time_precision   varchar(16) NOT NULL DEFAULT 'minute',
+	simultaneous	  smallint NOT NULL DEFAULT 1,
+	allow_split		  smallint NOT NULL DEFAULT 0,
   duree				real,               -- total duration of using ressource
   fk_user_create  integer,
   tms             timestamp DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP

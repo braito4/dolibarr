@@ -432,7 +432,7 @@ $coldisplay++;
 	<?php if (getDolGlobalString('MAIN_VIEW_LINE_NUMBER')) { ?>
 		<td class="linecolnum center"></td>
 	<?php } ?>
-	<td colspan="<?php echo $coldisplay - (!getDolGlobalString('MAIN_VIEW_LINE_NUMBER') ? 0 : 1) ?>"><?php echo $langs->trans('ServiceLimitedDuration').' '.$langs->trans('From').' '; ?>
+	<td colspan="<?php echo $coldisplay - (!getDolGlobalString('MAIN_VIEW_LINE_NUMBER') ? 0 : 1) ?>"><?php echo $langs->trans('ServiceLimitedDuration').' <span class="resource-time-start-label">'.$langs->trans('From').' '; ?>
 	<?php
 	$prefillDates = false;
 	$date_start_prefill = 0;
@@ -452,8 +452,9 @@ $coldisplay++;
 	}
 	$hourmin = getDolGlobalInt('MAIN_USE_HOURMIN_IN_DATE_RANGE');
 	print $form->selectDate($line->date_start, 'date_start', $hourmin, $hourmin, $line->date_start ? 0 : 1, "updateline", 1, 0);
-	print ' '.$langs->trans('to').' ';
+	print '</span><span class="resource-time-end-label"> '.$langs->trans('to').' ';
 	print $form->selectDate($line->date_end, 'date_end', $hourmin, $hourmin, $line->date_end ? 0 : 1, "updateline", 1, 0);
+	print '</span>';
 	if ($prefillDates) {
 		echo ' <span class="small"><a href="#" id="prefill_service_dates">'.$langs->trans('FillWithLastServiceDates').'</a></span>';
 	}
@@ -517,6 +518,12 @@ $coldisplay++;
 	</td>
 </tr>
 <?php }
+
+if (isModEnabled('resource')) {
+	$langs->load('resource');
+	print '<script src="'.DOL_URL_ROOT.'/resource/js/temporalpolicy.js"></script>';
+	print '<script>jQuery(function(){initResourceTemporalPolicy('.json_encode(array('url' => DOL_URL_ROOT.'/resource/ajax/temporalpolicy.php', 'productId' => (int) $line->fk_product, 'calculatedLabel' => $langs->transnoentities('ResourceEndCalculated'), 'automaticLabel' => $langs->transnoentities('ResourceTimeAutomatic'))).');});</script>';
+}
 ?>
 
 
