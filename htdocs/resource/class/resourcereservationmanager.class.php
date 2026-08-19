@@ -18,7 +18,6 @@ class ResourceReservationManager extends ResourceRequirementManager
 	const STATUS_CONFIRMED = 'confirmed';
 	const STATUS_CANCELED = 'canceled';
 	const STATUS_UNAVAILABLE = 'unavailable';
-	const STATUS_AWAITING_SUPPLY = 'awaiting_supply';
 
 	/** @var DoliDB */
 	protected $db;
@@ -551,17 +550,13 @@ class ResourceReservationManager extends ResourceRequirementManager
 	}
 
 	/**
-	 * Reassign one reservation when an external availability source revokes it.
+	 * Reassign one reservation when its current assignment fails.
 	 *
 	 * @param int    $assignmentId Assignment id
-	 * @param string $reason       Supplier explanation
-	 * @param User   $actor        Acting user
 	 * @return int<-2,1> 1 applied, -1 on error, -2 if assignment is not affected
 	 */
-	public function applyExternalAssignmentFailure($assignmentId, $reason, User $actor)
+	public function replaceFailedAssignment($assignmentId)
 	{
-		global $langs;
-		$langs->load('resource');
 		$sql = 'SELECT resource_id FROM '.MAIN_DB_PREFIX.'element_resources WHERE rowid='.((int) $assignmentId);
 		$assignment = $this->db->fetch_object($this->db->query($sql));
 		if (!$assignment) {
@@ -594,10 +589,6 @@ class ResourceReservationManager extends ResourceRequirementManager
 			$this->db->rollback();
 			return -1;
 		}
-		if ($this->createSupplierRevocationAlert($affected, $reason, $actor, $langs) < 0) {
-			$this->db->rollback();
-			return -1;
-		}
 		$this->db->commit();
 		return 1;
 	}
@@ -618,7 +609,7 @@ class ResourceReservationManager extends ResourceRequirementManager
 		$sql .= ' INNER JOIN '.MAIN_DB_PREFIX.'propal p ON p.rowid=pd.fk_propal';
 		$sql .= ' LEFT JOIN '.MAIN_DB_PREFIX.'product prod ON prod.rowid=pd.fk_product';
 		$sql .= $supplierJoin;
-		$sql .= ' WHERE er.resource_id='.((int) $resourceId)." AND er.reservation_status IN ('provisional','awaiting_supply','confirmed')";
+		$sql .= ' WHERE er.resource_id='.((int) $resourceId)." AND er.reservation_status NOT IN ('canceled','unavailable')";
 		$sql .= " AND (er.date_end IS NULL OR er.date_end >= '".$this->db->idate(dol_now())."')";
 		$sql .= ' UNION ALL ';
 		$sql .= "SELECT er.*, cd.fk_product, c.rowid as document_id, c.ref as document_ref, prod.ref as service_ref,";
@@ -678,48 +669,6 @@ class ResourceReservationManager extends ResourceRequirementManager
 				$reservation['date_end'],
 				!empty($reservation['supplier_name']) ? $reservation['supplier_name'] : '-',
 				$replacementRef !== '' ? $replacementRef : '-',
-			)
-		);
-		return $action->create($user);
-	}
-
-	/**
-	 * Create an urgent agenda alert for a supplier revocation.
-	 *
-	 * @param array<string,mixed> $reservation Affected reservation
-	 * @param string              $reason      Supplier explanation
-	 * @param User                $user        Acting user
-	 * @param Translate           $langs       Translation handler
-	 * @return int Event id, negative on error
-	 */
-	private function createSupplierRevocationAlert(array $reservation, $reason, User $user, Translate $langs)
-	{
-		require_once DOL_DOCUMENT_ROOT.'/comm/action/class/actioncomm.class.php';
-		$replacementRef = !empty($reservation['replacement']['ref']) ? (string) $reservation['replacement']['ref'] : '-';
-		$action = new ActionComm($this->db);
-		$action->type_code = 'AC_OTH_AUTO';
-		$action->code = 'AC_RESOURCE_SUPPLIER_REVOKED';
-		$action->label = $langs->trans('ResourceSupplierRevocationAlert', $reservation['supplier_name'], $reservation['document_ref']);
-		$action->datep = dol_now();
-		$action->datef = $action->datep;
-		$action->percentage = -1;
-		$action->priority = 10;
-		$action->socid = !empty($reservation['supplier_id']) ? (int) $reservation['supplier_id'] : 0;
-		$action->authorid = $user->id;
-		$action->userownerid = $user->id;
-		$action->elementid = (int) $reservation['document_id'];
-		$action->elementtype = (string) $reservation['document_type'];
-		$action->note_private = $this->formatLongTranslation(
-			$langs,
-			'ResourceSupplierRevocationAlertDetail',
-			array(
-				$reservation['supplier_name'],
-				$reservation['service_ref'],
-				$reservation['document_ref'],
-				$reservation['date_start'],
-				$reservation['date_end'],
-				$reason !== '' ? $reason : '-',
-				$replacementRef,
 			)
 		);
 		return $action->create($user);

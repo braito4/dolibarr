@@ -227,9 +227,8 @@ if ($object->id > 0) {
 			print '<td class="right">'.price($reservation->capacity_used).'</td>';
 			print '<td>'.(!empty($reservation->date_start) ? dol_print_date($db->jdate($reservation->date_start), 'dayhour') : '').'</td>';
 			print '<td>'.(!empty($reservation->date_end) ? dol_print_date($db->jdate($reservation->date_end), 'dayhour') : '').'</td>';
-			$isAwaitingSupply = ($reservation->reservation_status === 'awaiting_supply');
 			$statusClass = $isUnavailable ? '8' : ($reservation->reservation_status === 'confirmed' ? '3' : '1');
-			$statusLabel = $isUnavailable ? 'UnavailableReservation' : ($reservation->reservation_status === 'confirmed' ? 'ResourceStatusOccupied' : ($isAwaitingSupply ? 'AwaitingSupplyConfirmation' : 'ProvisionalReservation'));
+			$statusLabel = $isUnavailable ? 'UnavailableReservation' : ($reservation->reservation_status === 'confirmed' ? 'ResourceStatusOccupied' : 'ProvisionalReservation');
 			print '<td><span class="badge badge-status'.$statusClass.'">'.$langs->trans($statusLabel).'</span></td>';
 			print '</tr>';
 		}
