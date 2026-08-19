@@ -16,6 +16,7 @@ class ResourceReservationManager
 	const STATUS_CONFIRMED = 'confirmed';
 	const STATUS_CANCELED = 'canceled';
 	const STATUS_UNAVAILABLE = 'unavailable';
+	const STATUS_AWAITING_SUPPLY = 'awaiting_supply';
 
 	/** @var DoliDB */
 	private $db;

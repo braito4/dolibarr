@@ -16,6 +16,7 @@ $documentRoot = is_file(dirname(__FILE__).'/../../htdocs/master.inc.php')
 require_once $documentRoot.'/master.inc.php';
 require_once $documentRoot.'/resource/class/dolresource.class.php';
 require_once $documentRoot.'/resource/class/resourcereservationmanager.class.php';
+require_once $documentRoot.'/resource/class/resourcesupplyrequestmanager.class.php';
 require_once $documentRoot.'/resource/core/triggers/interface_99_modResource_ResourceReservations.class.php';
 require_once $documentRoot.'/bookcal/class/bookcalavailabilityprovider.class.php';
 
@@ -710,6 +711,50 @@ class ResourceReservationTest extends TestCase
 
 		$this->assertSame(array('12:00' => 1439), $slots);
 		$this->assertTrue($provider->isAvailable($calendarId, $slotStart, $slotStart + (1439 * 60)));
+	}
+
+	/**
+	 * Unknown availability keeps all future procurement links and lifecycle data.
+	 *
+	 * @return void
+	 */
+	public function testUnknownAvailabilityCanLinkSupplierWorkflow(): void
+	{
+		global $user, $langs, $conf;
+		$assignmentId = $this->insert('element_resources', array(
+			'element_id' => 99881,
+			'element_type' => 'propaldet',
+			'resource_id' => $this->firstResourceId,
+			'resource_type' => 'dolresource',
+			'relation_kind' => 'assignment',
+			'capacity_used' => 2,
+			'date_start' => '2026-10-10 08:00:00',
+			'date_end' => '2026-10-11 08:00:00',
+			'reservation_status' => ResourceReservationManager::STATUS_AWAITING_SUPPLY,
+		));
+		$manager = new ResourceSupplyRequestManager($this->db);
+		$requestId = $manager->create(array(
+			'fk_element_resource' => $assignmentId,
+			'fk_resource' => $this->firstResourceId,
+			'request_type' => 'supplier',
+			'fk_soc_supplier' => $this->thirdPartyId,
+			'fk_product_supplier' => $this->serviceId,
+			'quantity_requested' => 2,
+			'date_start' => '2026-10-10 08:00:00',
+			'date_end' => '2026-10-11 08:00:00',
+			'timezone' => 'Europe/Madrid',
+		), $user);
+		$this->assertGreaterThan(0, $requestId);
+		$this->assertSame(1, $manager->linkSupplierOrder($requestId, 8801, 8802, $user));
+
+		$order = new stdClass();
+		$order->id = 8801;
+		$this->assertSame(1, $this->trigger->runTrigger('ORDER_SUPPLIER_APPROVE', $order, $user, $langs, $conf));
+		$sql = 'SELECT * FROM '.MAIN_DB_PREFIX.'resource_supply_request WHERE rowid='.((int) $requestId);
+		$request = $this->db->fetch_object($this->db->query($sql));
+		$this->assertSame(ResourceSupplyRequestManager::STATUS_REQUESTED, $request->request_status);
+		$this->assertSame('ORDER_SUPPLIER_APPROVE', $request->supplier_order_status);
+		$this->assertSame(ResourceReservationManager::STATUS_AWAITING_SUPPLY, $this->fetchReservation('propaldet', 99881)->reservation_status);
 	}
 
 	/** @return int */

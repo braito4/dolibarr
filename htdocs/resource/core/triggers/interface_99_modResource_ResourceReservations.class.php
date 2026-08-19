@@ -9,6 +9,7 @@
 
 require_once DOL_DOCUMENT_ROOT.'/core/triggers/dolibarrtriggers.class.php';
 require_once DOL_DOCUMENT_ROOT.'/resource/class/resourcereservationmanager.class.php';
+require_once DOL_DOCUMENT_ROOT.'/resource/class/resourcesupplyrequestmanager.class.php';
 
 /**
  * Synchronize provisional proposal reservations and confirmed contract reservations.
@@ -43,6 +44,10 @@ class InterfaceResourceReservations extends DolibarrTriggers
 	{
 		if (!isModEnabled('resource')) {
 			return 0;
+		}
+		if (strpos($action, 'ORDER_SUPPLIER_') === 0) {
+			$manager = new ResourceSupplyRequestManager($this->db);
+			return $manager->handleSupplierOrderTrigger($action, (int) $object->id, $user);
 		}
 
 		if ($action === 'CONTRACT_VALIDATE') {
