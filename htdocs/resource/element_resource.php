@@ -77,6 +77,49 @@ $mandatory              = GETPOSTINT('mandatory');
 $cancel                 = GETPOST('cancel', 'alpha');
 $confirm                = GETPOST('confirm', 'alpha');
 $socid                  = GETPOSTINT('socid');
+$direction              = GETPOST('direction', 'alpha');
+$users_per_service_unit = (float) price2num(GETPOST('users_per_service_unit', 'alpha'), 'MS');
+$resource_role          = GETPOST('resource_role', 'alpha') ?: 'capacity';
+$requirement_group      = GETPOST('requirement_group', 'alphanohtml');
+$quantity_required      = (float) price2num(GETPOST('quantity_required', 'alpha'), 'MS');
+$duration_base          = GETPOSTINT('duration_base');
+$duration_per_unit      = GETPOSTINT('duration_per_unit');
+$setup_duration         = GETPOSTINT('setup_duration');
+$cleanup_duration       = GETPOSTINT('cleanup_duration');
+$scheduling_mode        = GETPOST('scheduling_mode', 'alpha') ?: 'same_as_parent';
+$start_input_mode       = GETPOST('start_input_mode', 'alpha') ?: 'none';
+$end_input_mode         = GETPOST('end_input_mode', 'alpha') ?: 'none';
+$time_precision         = GETPOST('time_precision', 'alpha') ?: 'minute';
+$simultaneous           = GETPOSTINT('simultaneous');
+$allow_split            = GETPOSTINT('allow_split');
+$context_scope          = GETPOST('context_scope', 'alpha') ?: 'service_line';
+$demand_source          = GETPOST('demand_source', 'alpha') ?: 'service_quantity';
+$capacity_metrics       = GETPOST('capacity_metrics', 'alpha') ?: 'units';
+$required_location      = GETPOST('required_location', 'alphanohtml');
+$selection_policy       = GETPOST('selection_policy', 'alpha') ?: 'preference_order';
+
+$allowedResourceRoles = array('capacity', 'production', 'delivery', 'equipment', 'operator');
+$allowedSchedulingModes = array('same_as_parent', 'fixed', 'next_available', 'within_window', 'manual');
+$allowedStartInputModes = array('none', 'date', 'datetime');
+$allowedEndInputModes = array('none', 'date', 'datetime', 'calculated');
+$allowedTimePrecisions = array('day', 'hour', 'minute', 'second');
+$allowedContextScopes = array('service_line', 'same_proposal');
+$allowedDemandSources = array('service_quantity', 'product_lines');
+$allowedCapacityMetrics = array('units', 'volume', 'volume_weight');
+$allowedSelectionPolicies = array('preference_order', 'smallest_sufficient');
+if (!in_array($resource_role, $allowedResourceRoles, true)) {
+	$resource_role = 'capacity';
+}
+if (!in_array($scheduling_mode, $allowedSchedulingModes, true)) {
+	$scheduling_mode = 'same_as_parent';
+}
+if (!in_array($start_input_mode, $allowedStartInputModes, true)) $start_input_mode = 'none';
+if (!in_array($end_input_mode, $allowedEndInputModes, true)) $end_input_mode = 'none';
+if (!in_array($time_precision, $allowedTimePrecisions, true)) $time_precision = 'minute';
+if (!in_array($context_scope, $allowedContextScopes, true)) $context_scope = 'service_line';
+if (!in_array($demand_source, $allowedDemandSources, true)) $demand_source = 'service_quantity';
+if (!in_array($capacity_metrics, $allowedCapacityMetrics, true)) $capacity_metrics = 'units';
+if (!in_array($selection_policy, $allowedSelectionPolicies, true)) $selection_policy = 'preference_order';
 
 if (empty($mandatory)) {
 	$mandatory = 0;
@@ -104,8 +147,11 @@ if ($element == 'fichinter') {
 if ($element == 'product' || $element == 'service') {	// When RESOURCE_ON_PRODUCTS or RESOURCE_ON_SERVICES is set
 	$tmpobject = new Product($db);
 	$tmpobject->fetch($element_id);
-	$fieldtype = $tmpobject->type;
-	$result = restrictedArea($user, 'produit|service', $element_id, 'product&product', '', '', (string) $fieldtype);
+	if ($tmpobject->type == Product::TYPE_PRODUCT) {
+		$result = restrictedArea($user, 'produit', $element_id, 'product&product');
+	} else {
+		$result = restrictedArea($user, 'service', $element_id, 'product&product');
+	}
 }
 
 // TODO
@@ -129,11 +175,52 @@ if (empty($reshook)) {
 	$error = 0;
 	$objstat = null;
 
+	if ($action == 'move_resource' && $permissiontoadd && ($element == 'product' || $element == 'service')) {
+		$sql = "SELECT rowid, position FROM ".MAIN_DB_PREFIX."element_resources";
+		$sql .= " WHERE rowid = ".((int) $lineid);
+		$sql .= " AND element_id = ".((int) $element_id);
+		$sql .= " AND element_type = '".$db->escape($element)."'";
+		$resql = $db->query($sql);
+		$current = $resql ? $db->fetch_object($resql) : null;
+		if ($current) {
+			$sql = "SELECT rowid, position FROM ".MAIN_DB_PREFIX."element_resources";
+			$sql .= " WHERE element_id = ".((int) $element_id);
+			$sql .= " AND element_type = '".$db->escape($element)."'";
+			$sql .= " AND resource_type = '".$db->escape($resource_type)."'";
+			if ($direction == 'up') {
+				$sql .= " AND position < ".((int) $current->position);
+				$sql .= " ORDER BY position DESC, rowid DESC";
+			} else {
+				$sql .= " AND position > ".((int) $current->position);
+				$sql .= " ORDER BY position ASC, rowid ASC";
+			}
+			$sql .= $db->plimit(1);
+			$resql = $db->query($sql);
+			$swap = $resql ? $db->fetch_object($resql) : null;
+			if ($swap) {
+				$db->begin();
+				$result1 = $db->query("UPDATE ".MAIN_DB_PREFIX."element_resources SET position = ".((int) $swap->position)." WHERE rowid = ".((int) $current->rowid));
+				$result2 = $db->query("UPDATE ".MAIN_DB_PREFIX."element_resources SET position = ".((int) $current->position)." WHERE rowid = ".((int) $swap->rowid));
+				if ($result1 && $result2) {
+					$db->commit();
+				} else {
+					$db->rollback();
+				}
+			}
+		}
+		header("Location: ".$_SERVER['PHP_SELF']."?element=".urlencode($element)."&element_id=".((int) $element_id));
+		exit;
+	}
+
 	if ($action == 'add_element_resource' && !$cancel && $permissiontoadd) {	// Test on permission already done in header before actions
 		$res = 0;
 		if (!($resource_id > 0)) {
 			$error++;
 			setEventMessages($langs->trans("ErrorFieldRequired", $langs->transnoentitiesnoconv("Resource")), null, 'errors');
+			$action = '';
+		} elseif (($element == 'product' || $element == 'service') && $users_per_service_unit <= 0) {
+			$error++;
+			setEventMessages($langs->trans('ErrorFieldRequired', $langs->transnoentitiesnoconv('UsersPerServiceUnit')), null, 'errors');
 			$action = '';
 		} else {
 			$objstat = fetchObjectByElement($element_id, $element, $element_ref);
@@ -198,7 +285,30 @@ if (empty($reshook)) {
 			}
 
 			if (!$error) {
-				$res = $objstat->add_element_resource($resource_id, $resource_type, $busy, $mandatory);
+				if ($element == 'product' || $element == 'service') {
+					$busy = 0;
+				}
+				$requirement = array(
+					'resource_role' => $resource_role,
+					'requirement_group' => $requirement_group,
+					'quantity_required' => $quantity_required > 0 ? $quantity_required : 1,
+					'duration_base' => $duration_base,
+					'duration_per_unit' => $duration_per_unit,
+					'setup_duration' => $setup_duration,
+					'cleanup_duration' => $cleanup_duration,
+					'scheduling_mode' => $scheduling_mode,
+					'start_input_mode' => $start_input_mode,
+					'end_input_mode' => $end_input_mode,
+					'time_precision' => $time_precision,
+					'simultaneous' => $simultaneous,
+					'allow_split' => $allow_split,
+					'context_scope' => $context_scope,
+					'demand_source' => $demand_source,
+					'capacity_metrics' => $capacity_metrics,
+					'required_location' => $required_location,
+					'selection_policy' => $selection_policy,
+				);
+				$res = $objstat->add_element_resource($resource_id, $resource_type, $busy, $mandatory, 0, 0, $users_per_service_unit, $requirement);
 			}
 		}
 
@@ -217,6 +327,32 @@ if (empty($reshook)) {
 		if ($res) {
 			$object->busy = $busy;
 			$object->mandatory = $mandatory;
+			if ($object->element_type == 'product' || $object->element_type == 'service') {
+				if ($users_per_service_unit <= 0) {
+					$error++;
+					setEventMessages($langs->trans('ErrorFieldRequired', $langs->transnoentitiesnoconv('UsersPerServiceUnit')), null, 'errors');
+				} else {
+					$object->users_per_service_unit = $users_per_service_unit;
+					$object->resource_role = $resource_role;
+					$object->requirement_group = $requirement_group;
+					$object->quantity_required = $quantity_required > 0 ? $quantity_required : 1;
+					$object->duration_base = $duration_base;
+					$object->duration_per_unit = $duration_per_unit;
+					$object->setup_duration = $setup_duration;
+					$object->cleanup_duration = $cleanup_duration;
+					$object->scheduling_mode = $scheduling_mode;
+					$object->start_input_mode = $start_input_mode;
+					$object->end_input_mode = $end_input_mode;
+					$object->time_precision = $time_precision;
+					$object->simultaneous = $simultaneous;
+					$object->allow_split = $allow_split;
+					$object->context_scope = $context_scope;
+					$object->demand_source = $demand_source;
+					$object->capacity_metrics = $capacity_metrics;
+					$object->required_location = $required_location;
+					$object->selection_policy = $selection_policy;
+				}
+			}
 
 			if (getDolGlobalString('RESOURCE_USED_IN_EVENT_CHECK') && $object->objelement instanceof ActionComm && $object->element_type == 'action' && $object->resource_type == 'dolresource' && intval($object->busy) == 1) {
 				$eventDateStart = $object->objelement->datep;  // @phan-suppress-current-line PhanUndeclaredProperty
@@ -669,7 +805,10 @@ if (!$ret) {
 			$defaulttpldir = '/core/tpl';
 			$dirtpls = array_merge($conf->modules_parts['tpl'], array($defaulttpldir), array($path.$defaulttpldir));
 
-			foreach ($dirtpls as $module => $reldir) {
+			// Do not render the add form while editing an existing link. Apart
+			// from reducing clutter, this avoids duplicate field identifiers that
+			// made labels and JavaScript target the wrong form.
+			if ($mode !== 'edit') foreach ($dirtpls as $module => $reldir) {
 				if (file_exists(dol_buildpath($reldir.'/resource_'.$element_prop['element'].'_add.tpl.php'))) {
 					$tpl = dol_buildpath($reldir.'/resource_'.$element_prop['element'].'_add.tpl.php');
 				} else {

@@ -6064,13 +6064,30 @@ abstract class CommonObject
 	 *	@param		int		$busy				Busy or not
 	 *	@param		int		$mandatory			Mandatory or not
 	 *  @param		int		$notrigger			Disable all triggers
+	 *  @param		int		$position			Preference position (0 = append)
+	 *  @param		float	$usersPerServiceUnit	Number of resource users consumed by one service unit
+	 *  @param		array<string,mixed>	$requirement	Requirement metadata for product/service relations
 	 *	@return		int							Return integer <=0 if KO, >0 if OK
 	 */
-	public function add_element_resource($resource_id, $resource_type, $busy = 0, $mandatory = 0, $notrigger = 0)
+	public function add_element_resource($resource_id, $resource_type, $busy = 0, $mandatory = 0, $notrigger = 0, $position = 0, $usersPerServiceUnit = 0.0, array $requirement = array())
 	{
 		// phpcs:enable
 		global $user;
 		$this->db->begin();
+
+		if ($position <= 0) {
+			$sql = "SELECT COALESCE(MAX(position), 0) + 1 AS next_position";
+			$sql .= " FROM ".$this->db->prefix()."element_resources";
+			$sql .= " WHERE element_id = ".((int) $this->id);
+			$sql .= " AND element_type = '".$this->db->escape($this->element)."'";
+			$sql .= " AND resource_type = '".$this->db->escape($resource_type)."'";
+			$resql = $this->db->query($sql);
+			if ($resql && ($obj = $this->db->fetch_object($resql))) {
+				$position = (int) $obj->next_position;
+			} else {
+				$position = 1;
+			}
+		}
 
 		$sql = "INSERT INTO ".$this->db->prefix()."element_resources (";
 		$sql .= "resource_id";
@@ -6079,6 +6096,12 @@ abstract class CommonObject
 		$sql .= ", element_type";
 		$sql .= ", busy";
 		$sql .= ", mandatory";
+		$sql .= ", position";
+		$sql .= ", users_per_service_unit";
+		$sql .= ", relation_kind, resource_role, requirement_group, quantity_required";
+		$sql .= ", duration_base, duration_per_unit, setup_duration, cleanup_duration";
+		$sql .= ", scheduling_mode, start_input_mode, end_input_mode, time_precision, simultaneous, allow_split";
+		$sql .= ", context_scope, demand_source, capacity_metrics, required_location, selection_policy";
 		$sql .= ") VALUES (";
 		$sql .= ((int) $resource_id);
 		$sql .= ", '".$this->db->escape($resource_type)."'";
@@ -6086,6 +6109,27 @@ abstract class CommonObject
 		$sql .= ", '".$this->db->escape($this->element)."'";
 		$sql .= ", '".$this->db->escape((string) $busy)."'";
 		$sql .= ", '".$this->db->escape((string) $mandatory)."'";
+		$sql .= ", ".((int) $position);
+		$sql .= ", ".price2num($usersPerServiceUnit, 'MS');
+		$sql .= ", 'requirement'";
+		$sql .= ", '".$this->db->escape(!empty($requirement['resource_role']) ? $requirement['resource_role'] : 'capacity')."'";
+		$sql .= ", ".(!empty($requirement['requirement_group']) ? "'".$this->db->escape($requirement['requirement_group'])."'" : 'NULL');
+		$sql .= ", ".price2num(isset($requirement['quantity_required']) ? $requirement['quantity_required'] : 1, 'MS');
+		$sql .= ", ".((int) (!empty($requirement['duration_base']) ? $requirement['duration_base'] : 0));
+		$sql .= ", ".((int) (!empty($requirement['duration_per_unit']) ? $requirement['duration_per_unit'] : 0));
+		$sql .= ", ".((int) (!empty($requirement['setup_duration']) ? $requirement['setup_duration'] : 0));
+		$sql .= ", ".((int) (!empty($requirement['cleanup_duration']) ? $requirement['cleanup_duration'] : 0));
+		$sql .= ", '".$this->db->escape(!empty($requirement['scheduling_mode']) ? $requirement['scheduling_mode'] : 'same_as_parent')."'";
+		$sql .= ", '".$this->db->escape(!empty($requirement['start_input_mode']) ? $requirement['start_input_mode'] : 'none')."'";
+		$sql .= ", '".$this->db->escape(!empty($requirement['end_input_mode']) ? $requirement['end_input_mode'] : 'none')."'";
+		$sql .= ", '".$this->db->escape(!empty($requirement['time_precision']) ? $requirement['time_precision'] : 'minute')."'";
+		$sql .= ", ".(!isset($requirement['simultaneous']) || !empty($requirement['simultaneous']) ? 1 : 0);
+		$sql .= ", ".(!empty($requirement['allow_split']) ? 1 : 0);
+		$sql .= ", '".$this->db->escape(!empty($requirement['context_scope']) ? $requirement['context_scope'] : 'service_line')."'";
+		$sql .= ", '".$this->db->escape(!empty($requirement['demand_source']) ? $requirement['demand_source'] : 'service_quantity')."'";
+		$sql .= ", '".$this->db->escape(!empty($requirement['capacity_metrics']) ? $requirement['capacity_metrics'] : 'units')."'";
+		$sql .= ", ".(!empty($requirement['required_location']) ? "'".$this->db->escape($requirement['required_location'])."'" : 'NULL');
+		$sql .= ", '".$this->db->escape(!empty($requirement['selection_policy']) ? $requirement['selection_policy'] : 'preference_order')."'";
 		$sql .= ")";
 
 		dol_syslog(get_class($this)."::add_element_resource", LOG_DEBUG);

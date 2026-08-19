@@ -613,15 +613,17 @@ if ((isModEnabled("service") || ($object->element == 'contrat')) && $dateSelecto
 	}
 
 	if (!empty($object->element) && $object->element == 'contrat') {
-		print $langs->trans("DateStartPlanned").' ';
+		print '<span class="resource-time-start-label">'.$langs->trans("DateStartPlanned").' ';
 		print $form->selectDate($date_start, "date_start", $usehm, $usehm, 1, "addproduct");
-		print ' &nbsp; '.$langs->trans("DateEndPlanned").' ';
+		print '</span><span class="resource-time-end-label"> &nbsp; '.$langs->trans("DateEndPlanned").' ';
 		print $form->selectDate($date_end, "date_end", $usehm, $usehm, 1, "addproduct");
+		print '</span>';
 	} else {
-		print $langs->trans('ServiceLimitedDuration').' '.$langs->trans('From').' ';
+		print $langs->trans('ServiceLimitedDuration').' <span class="resource-time-start-label">'.$langs->trans('From').' ';
 		print $form->selectDate($date_start, 'date_start', getDolGlobalInt('MAIN_USE_HOURMIN_IN_DATE_RANGE'), getDolGlobalInt('MAIN_USE_HOURMIN_IN_DATE_RANGE'), 1, "addproduct", 1, 0);
-		print ' '.$langs->trans('to').' ';
+		print '</span><span class="resource-time-end-label"> '.$langs->trans('to').' ';
 		print $form->selectDate($date_end, 'date_end', getDolGlobalInt('MAIN_USE_HOURMIN_IN_DATE_RANGE'), getDolGlobalInt('MAIN_USE_HOURMIN_IN_DATE_RANGE'), 1, "addproduct", 1, 0);
+		print '</span>';
 	}
 
 	if ($prefillDates) {
@@ -667,6 +669,12 @@ if ((isModEnabled("service") || ($object->element == 'contrat')) && $dateSelecto
 	print '</script>';
 	print '</td>';
 	print '</tr>'."\n";
+}
+
+if (isModEnabled('resource')) {
+	$langs->load('resource');
+	print '<script src="'.DOL_URL_ROOT.'/resource/js/temporalpolicy.js"></script>';
+	print '<script>jQuery(function(){initResourceTemporalPolicy('.json_encode(array('url' => DOL_URL_ROOT.'/resource/ajax/temporalpolicy.php', 'productId' => GETPOSTINT('idprod'), 'calculatedLabel' => $langs->transnoentities('ResourceEndCalculated'), 'automaticLabel' => $langs->transnoentities('ResourceTimeAutomatic'))).');});</script>';
 }
 
 $langs->load('stocks');
