@@ -8,6 +8,8 @@ if (!defined('NOREQUIREAJAX')) define('NOREQUIREAJAX', 1);
 require '../../main.inc.php';
 require_once DOL_DOCUMENT_ROOT.'/resource/class/resourcerequirementmanager.class.php';
 
+/** @var DoliDB $db */
+
 $productId = GETPOSTINT('product_id');
 $policy = array('has_requirements' => false, 'start_input_mode' => 'none', 'end_input_mode' => 'none', 'time_precision' => 'day', 'show_start' => false, 'show_end' => false, 'calculate_end' => false, 'automatic' => false);
 if ($productId > 0) {
