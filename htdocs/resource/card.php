@@ -405,7 +405,7 @@ if ($action == 'create' || $object->fetch($id, $ref) > 0) {
 		print '<input type="text" class="width75 right" name="max_users" id="max_users" value="'.(GETPOSTISSET('max_users') ? GETPOST('max_users', 'int') : ($object->max_users > 0 ? $object->max_users : '')).'"></td>';
 		print '</tr>';
 
-		print '<tr class="resource-model-users"><td>'.$form->editfieldkey('AllowResourceOverflow', 'allow_overflow', '', $object, 0, 'string', '', 0, 0, 'id', $langs->trans('AllowResourceOverflowHelp')).'</td>';
+		print '<tr class="resource-model-overflow"><td>'.$form->editfieldkey('AllowResourceOverflow', 'allow_overflow', '', $object, 0, 'string', '', 0, 0, 'id', $langs->trans('AllowResourceOverflowHelp')).'</td>';
 		print '<td>'.$form->selectyesno('allow_overflow', GETPOSTISSET('allow_overflow') ? $allow_overflow : $object->allow_overflow, 1).'</td>';
 		print '</tr>';
 
@@ -418,7 +418,7 @@ if ($action == 'create' || $object->fetch($id, $ref) > 0) {
 		print '</td></tr>';
 		print '<tr class="resource-model-cooldown"><td>'.$langs->trans('ResourceCooldownMinutes').'</td><td>';
 		print '<input type="number" min="0" class="width75" name="cooldown_minutes" value="'.(GETPOSTISSET('cooldown_minutes') ? $cooldown_minutes : (int) $object->cooldown_minutes).'"> '.$langs->trans('Minutes').'</td></tr>';
-		print '<script>jQuery(function(){var models='.json_encode($typeModels).'; function toggleModelFields(selector, visible){jQuery(selector).toggle(visible).find(":input").prop("disabled", !visible);} function applyResourceModel(){var model=models[jQuery("#selectfk_code_type_resource").val()] || {capacity_mode:"none",supports_cooldown:0}; toggleModelFields(".resource-model-users", model.capacity_mode === "users"); toggleModelFields(".resource-model-metric", model.capacity_mode === "custom" || model.capacity_mode === "volume"); toggleModelFields(".resource-model-volume", model.capacity_mode === "volume"); toggleModelFields(".resource-model-cooldown", !!model.supports_cooldown); jQuery("#resource_metric_label").text(model.metric_label || '.json_encode($langs->transnoentities('ResourceMetricValue')).'); jQuery("#resource_metric_unit").text(model.metric_unit || "");} jQuery("#selectfk_code_type_resource").on("change", applyResourceModel); applyResourceModel();});</script>';
+		print '<script>jQuery(function(){var models='.json_encode($typeModels).'; function toggleModelFields(selector, visible){jQuery(selector).toggle(visible).find(":input").prop("disabled", !visible);} function applyResourceModel(){var model=models[jQuery("#selectfk_code_type_resource").val()] || {capacity_mode:"none",supports_cooldown:0}; toggleModelFields(".resource-model-users", model.capacity_mode === "users"); toggleModelFields(".resource-model-overflow", model.capacity_mode === "users" || model.capacity_mode === "volume"); toggleModelFields(".resource-model-metric", model.capacity_mode === "custom" || model.capacity_mode === "volume"); toggleModelFields(".resource-model-volume", model.capacity_mode === "volume"); toggleModelFields(".resource-model-cooldown", !!model.supports_cooldown); jQuery("#resource_metric_label").text(model.metric_label || '.json_encode($langs->transnoentities('ResourceMetricValue')).'); jQuery("#resource_metric_unit").text(model.metric_unit || "");} jQuery("#selectfk_code_type_resource").on("change", applyResourceModel); applyResourceModel();});</script>';
 
 		// URL
 		print '<tr><td>'.$form->editfieldkey('URL', 'url', '', $object, 0).'</td>';
@@ -494,6 +494,9 @@ if ($action == 'create' || $object->fetch($id, $ref) > 0) {
 
 		if ($object->metric_value !== null) {
 			print '<tr><td>'.dol_escape_htmltag($object->metric_label ?: $langs->trans('ResourceMetricValue')).'</td><td>'.price($object->metric_value).' '.dol_escape_htmltag($object->metric_unit ?: '').'</td></tr>';
+		}
+		if ($object->capacity_mode === 'volume') {
+			print '<tr><td>'.$langs->trans('AllowResourceOverflow').'</td><td>'.yn($object->allow_overflow).'</td></tr>';
 		}
 		if ($object->capacity_mode === 'volume' && $object->max_payload_weight !== null) {
 			print '<tr><td>'.$langs->trans('ResourceMaxPayloadWeight').'</td><td>'.price($object->max_payload_weight).' kg</td></tr>';
