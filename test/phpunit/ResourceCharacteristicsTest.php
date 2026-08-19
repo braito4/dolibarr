@@ -69,6 +69,28 @@ class ResourceCharacteristicsTest extends TestCase
 	}
 
 	/**
+	 * Volume resources retain their declared capacity.
+	 *
+	 * @return void
+	 */
+	public function testVolumeCapacityRetainsMetricValue(): void
+	{
+		$sql = 'INSERT INTO '.$this->db->prefix().'c_type_resource';
+		$sql .= ' (code, label, capacity_mode, metric_label, metric_unit, supports_cooldown, active)';
+		$sql .= " VALUES ('PHPUNIT_VEHICLE', 'Vehicle', 'volume', 'Load volume', 'm3', 0, 1)";
+		$this->assertTrue((bool) $this->db->query($sql));
+
+		$resource = new Dolresource($this->db);
+		$resource->fk_code_type_resource = 'PHPUNIT_VEHICLE';
+		$resource->metric_value = 12.5;
+		$resource->applyTypeCapabilities();
+
+		$this->assertSame('volume', $resource->capacity_mode);
+		$this->assertSame(12.5, $resource->metric_value);
+		$this->assertSame('m3', $resource->metric_unit);
+	}
+
+	/**
 	 * Manual statuses expose unknown, free and out-of-service values.
 	 *
 	 * @return void

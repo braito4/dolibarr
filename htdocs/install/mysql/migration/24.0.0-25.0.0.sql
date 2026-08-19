@@ -94,7 +94,7 @@ ALTER TABLE llx_c_type_resource ADD COLUMN supports_cooldown smallint NOT NULL D
 ALTER TABLE llx_resource ADD COLUMN metric_value real DEFAULT NULL;
 ALTER TABLE llx_resource ADD COLUMN cooldown_minutes integer NOT NULL DEFAULT 0;
 UPDATE llx_c_type_resource SET capacity_mode = 'users' WHERE code = 'RES_ROOMS';
-UPDATE llx_c_type_resource SET capacity_mode = 'custom', metric_label = 'Usage value' WHERE code = 'RES_CARS';
+UPDATE llx_c_type_resource SET capacity_mode = 'volume', metric_label = 'Load volume', metric_unit = 'm3' WHERE code = 'RES_CARS';
 INSERT INTO llx_c_type_resource (code, label, capacity_mode, supports_cooldown, active) SELECT 'RES_MACHINES', 'Machinery', 'none', 1, 1 WHERE NOT EXISTS (SELECT 1 FROM llx_c_type_resource WHERE code = 'RES_MACHINES');
 
 -- Resource requirements attached to products and services
