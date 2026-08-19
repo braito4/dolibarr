@@ -189,7 +189,7 @@ class ResourceReservationManager extends ResourceRequirementManager
 		if (empty($resourceIds) || empty($dateStart) || empty($dateEnd) || $dateStart >= $dateEnd) {
 			return $assignments;
 		}
-		$sqlResourceIds = implode(',', $resourceIds);
+		$sqlResourceIds = $this->db->sanitize(implode(',', $resourceIds));
 		$sql = 'SELECT resource_id, date_start, date_end, capacity_used FROM '.MAIN_DB_PREFIX.'element_resources';
 		$sql .= ' WHERE resource_id IN ('.$sqlResourceIds.')';
 		$sql .= " AND resource_type = '".$this->db->escape($resourceType)."'";
