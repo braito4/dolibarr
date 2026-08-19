@@ -31,6 +31,8 @@ CREATE TABLE llx_resource
   max_users             integer         DEFAULT NULL,
   allow_overflow        smallint        NOT NULL DEFAULT 0,
 	metric_value          real            DEFAULT NULL,
+	max_payload_weight    real            DEFAULT NULL,
+	operational_location  varchar(255)    DEFAULT NULL,
 	cooldown_minutes      integer         NOT NULL DEFAULT 0,
   phone                 varchar(30)     DEFAULT NULL,
   email                 varchar(255)    DEFAULT NULL,

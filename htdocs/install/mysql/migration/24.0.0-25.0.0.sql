@@ -92,6 +92,8 @@ ALTER TABLE llx_c_type_resource ADD COLUMN metric_label varchar(128) DEFAULT NUL
 ALTER TABLE llx_c_type_resource ADD COLUMN metric_unit varchar(32) DEFAULT NULL;
 ALTER TABLE llx_c_type_resource ADD COLUMN supports_cooldown smallint NOT NULL DEFAULT 0;
 ALTER TABLE llx_resource ADD COLUMN metric_value real DEFAULT NULL;
+ALTER TABLE llx_resource ADD COLUMN max_payload_weight real DEFAULT NULL;
+ALTER TABLE llx_resource ADD COLUMN operational_location varchar(255) DEFAULT NULL;
 ALTER TABLE llx_resource ADD COLUMN cooldown_minutes integer NOT NULL DEFAULT 0;
 UPDATE llx_c_type_resource SET capacity_mode = 'users' WHERE code = 'RES_ROOMS';
 UPDATE llx_c_type_resource SET capacity_mode = 'volume', metric_label = 'Load volume', metric_unit = 'm3' WHERE code = 'RES_CARS';

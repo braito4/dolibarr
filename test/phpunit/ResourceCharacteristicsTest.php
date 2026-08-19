@@ -59,12 +59,14 @@ class ResourceCharacteristicsTest extends TestCase
 		$resource->max_users = 4;
 		$resource->allow_overflow = 1;
 		$resource->metric_value = 25.5;
+		$resource->max_payload_weight = 500.0;
 		$resource->cooldown_minutes = 30;
 		$resource->applyTypeCapabilities();
 
 		$this->assertNull($resource->max_users);
 		$this->assertSame(0, $resource->allow_overflow);
 		$this->assertNull($resource->metric_value);
+		$this->assertNull($resource->max_payload_weight);
 		$this->assertSame(30, $resource->cooldown_minutes);
 	}
 
@@ -83,10 +85,14 @@ class ResourceCharacteristicsTest extends TestCase
 		$resource = new Dolresource($this->db);
 		$resource->fk_code_type_resource = 'PHPUNIT_VEHICLE';
 		$resource->metric_value = 12.5;
+		$resource->max_payload_weight = 950.0;
+		$resource->operational_location = 'Madrid depot';
 		$resource->applyTypeCapabilities();
 
 		$this->assertSame('volume', $resource->capacity_mode);
 		$this->assertSame(12.5, $resource->metric_value);
+		$this->assertSame(950.0, $resource->max_payload_weight);
+		$this->assertSame('Madrid depot', $resource->operational_location);
 		$this->assertSame('m3', $resource->metric_unit);
 	}
 
