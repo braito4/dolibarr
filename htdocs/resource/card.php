@@ -342,7 +342,7 @@ if ($action == 'create' || $object->fetch($id, $ref) > 0) {
 
 		// Manual availability status. Busy is calculated from reservations and capacity.
 		$statusOptions = Dolresource::getStatusArray();
-		if ($action == 'create') {
+		if (!getDolGlobalInt('RESOURCE_ENABLE_UNKNOWN_AVAILABILITY')) {
 			unset($statusOptions[Dolresource::STATUS_UNKNOWN]);
 		}
 		print '<tr><td>'.$langs->trans('Status').'</td><td>';

@@ -541,13 +541,6 @@ class ResourceReservationManager extends ResourceRequirementManager
 				$this->db->rollback();
 				return -1;
 			}
-			$sql = 'UPDATE '.MAIN_DB_PREFIX."resource_supply_request SET request_status='unavailable'";
-			$sql .= ' WHERE fk_element_resource='.((int) $reservation['rowid']);
-			$sql .= " AND request_status NOT IN ('canceled','released','rejected')";
-			if (!$this->db->query($sql)) {
-				$this->db->rollback();
-				return -1;
-			}
 			if ($actor instanceof User && $this->createOutOfServiceAlert($resourceRef, $reservation, $actor, $langs) < 0) {
 				$this->db->rollback();
 				return -1;
@@ -558,14 +551,14 @@ class ResourceReservationManager extends ResourceRequirementManager
 	}
 
 	/**
-	 * Reassign one reservation when a supplier revokes previously accepted availability.
+	 * Reassign one reservation when an external availability source revokes it.
 	 *
 	 * @param int    $assignmentId Assignment id
 	 * @param string $reason       Supplier explanation
 	 * @param User   $actor        Acting user
 	 * @return int<-2,1> 1 applied, -1 on error, -2 if assignment is not affected
 	 */
-	public function applySupplierRevocation($assignmentId, $reason, User $actor)
+	public function applyExternalAssignmentFailure($assignmentId, $reason, User $actor)
 	{
 		global $langs;
 		$langs->load('resource');
@@ -597,20 +590,6 @@ class ResourceReservationManager extends ResourceRequirementManager
 			$sql = 'UPDATE '.MAIN_DB_PREFIX."element_resources SET reservation_status='unavailable'";
 			$sql .= ' WHERE rowid='.((int) $assignmentId);
 		}
-		if (!$this->db->query($sql)) {
-			$this->db->rollback();
-			return -1;
-		}
-		$sql = 'UPDATE '.MAIN_DB_PREFIX."resource_supply_request SET request_status='unavailable',";
-		$sql .= " supplier_order_status='SUPPLIER_REVOKED', fk_user_modif=".((int) $actor->id);
-		$sql .= ' WHERE fk_element_resource='.((int) $assignmentId);
-		if (!$this->db->query($sql)) {
-			$this->db->rollback();
-			return -1;
-		}
-		$sql = 'UPDATE '.MAIN_DB_PREFIX.'resource_time_slot SET active=0 WHERE rowid IN (';
-		$sql .= 'SELECT fk_availability_slot FROM '.MAIN_DB_PREFIX.'resource_supply_request';
-		$sql .= ' WHERE fk_element_resource='.((int) $assignmentId).' AND fk_availability_slot IS NOT NULL)';
 		if (!$this->db->query($sql)) {
 			$this->db->rollback();
 			return -1;

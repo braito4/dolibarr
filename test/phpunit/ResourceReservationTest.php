@@ -16,9 +16,10 @@ $documentRoot = is_file(dirname(__FILE__).'/../../htdocs/master.inc.php')
 require_once $documentRoot.'/master.inc.php';
 require_once $documentRoot.'/resource/class/dolresource.class.php';
 require_once $documentRoot.'/resource/class/resourcereservationmanager.class.php';
-require_once $documentRoot.'/resource/class/resourcesupplyrequestmanager.class.php';
+require_once $documentRoot.'/custom/recursos-beta-br4ito/class/recursosbetabr4itosupplyrequestmanager.class.php';
 require_once $documentRoot.'/resource/core/triggers/interface_99_modResource_ResourceReservations.class.php';
 require_once $documentRoot.'/custom/recursos-beta-br4ito/core/triggers/interface_98_modRecursosBetaBr4ito_RecursosBetaBr4itoTriggers.class.php';
+require_once $documentRoot.'/custom/recursos-beta-br4ito/core/triggers/interface_100_modRecursosBetaBr4ito_RecursosBetaBr4itoRequestTriggers.class.php';
 require_once $documentRoot.'/bookcal/class/bookcalavailabilityprovider.class.php';
 
 if (empty($user->id)) {
@@ -41,6 +42,9 @@ class ResourceReservationTest extends TestCase
 
 	/** @var InterfaceRecursosBetaBr4itoTriggers */
 	private $unknownTrigger;
+
+	/** @var InterfaceRecursosBetaBr4itoRequestTriggers */
+	private $unknownRequestTrigger;
 
 	/** @var int */
 	private $serviceId;
@@ -88,6 +92,7 @@ class ResourceReservationTest extends TestCase
 		$this->db->begin();
 		$this->trigger = new InterfaceResourceReservations($this->db);
 		$this->unknownTrigger = new InterfaceRecursosBetaBr4itoTriggers($this->db);
+		$this->unknownRequestTrigger = new InterfaceRecursosBetaBr4itoRequestTriggers($this->db);
 
 		$this->thirdPartyId = $this->insert('societe', array(
 			'nom' => 'PHPUnit Resource Reservation',
@@ -1526,6 +1531,32 @@ class ResourceReservationTest extends TestCase
 		$this->assertEquals(2.0, $manager->getOccupiedCapacityFromAssignments($assignments, $this->firstResourceId, '2026-10-10 08:00:00', '2026-10-11 08:00:00'));
 	}
 
+	/** Core resource reservations ignore unknown resources when the beta module is disabled. */
+	public function testCoreResourceWorksWithoutUnknownResourceModule(): void
+	{
+		global $conf;
+		$previousEnabled = $conf->global->RESOURCE_ENABLE_UNKNOWN_AVAILABILITY ?? null;
+		$conf->global->RESOURCE_ENABLE_UNKNOWN_AVAILABILITY = 0;
+		try {
+			$sql = 'UPDATE '.MAIN_DB_PREFIX.'resource SET fk_statut='.Dolresource::STATUS_UNKNOWN;
+			$sql .= ' WHERE rowid='.((int) $this->firstResourceId);
+			$this->assertTrue((bool) $this->db->query($sql));
+			$lineId = $this->createProposalLine(1, '2026-12-01 14:00:00', '2026-12-02 14:00:00');
+			$sql = 'SELECT fk_propal FROM '.MAIN_DB_PREFIX.'propaldet WHERE rowid='.((int) $lineId);
+			$proposal = $this->db->fetch_object($this->db->query($sql));
+			$this->assertSame(1, $this->runObjectTrigger('PROPAL_VALIDATE', (int) $proposal->fk_propal));
+			$reservation = $this->fetchReservation('propaldet', $lineId);
+			$this->assertSame($this->secondResourceId, (int) $reservation->resource_id);
+			$this->assertSame(ResourceReservationManager::STATUS_CONFIRMED, $reservation->reservation_status);
+		} finally {
+			if ($previousEnabled === null) {
+				unset($conf->global->RESOURCE_ENABLE_UNKNOWN_AVAILABILITY);
+			} else {
+				$conf->global->RESOURCE_ENABLE_UNKNOWN_AVAILABILITY = $previousEnabled;
+			}
+		}
+	}
+
 	/**
 	 * @param string $ref      Resource reference
 	 * @param int    $capacity Maximum capacity
@@ -1637,7 +1668,8 @@ class ResourceReservationTest extends TestCase
 		$object->context = array();
 		$unknownResult = $this->unknownTrigger->runTrigger($action, $object, $user, $langs, $conf);
 		$coreResult = $this->trigger->runTrigger($action, $object, $user, $langs, $conf);
-		return min($unknownResult, $coreResult) < 0 ? min($unknownResult, $coreResult) : max($unknownResult, $coreResult);
+		$postResult = $this->unknownRequestTrigger->runTrigger($action, $object, $user, $langs, $conf);
+		return min($unknownResult, $coreResult, $postResult) < 0 ? min($unknownResult, $coreResult, $postResult) : max($unknownResult, $coreResult, $postResult);
 	}
 
 	/**
@@ -1652,7 +1684,8 @@ class ResourceReservationTest extends TestCase
 		$object->id = $objectId;
 		$unknownResult = $this->unknownTrigger->runTrigger($action, $object, $user, $langs, $conf);
 		$coreResult = $this->trigger->runTrigger($action, $object, $user, $langs, $conf);
-		return min($unknownResult, $coreResult) < 0 ? min($unknownResult, $coreResult) : max($unknownResult, $coreResult);
+		$postResult = $this->unknownRequestTrigger->runTrigger($action, $object, $user, $langs, $conf);
+		return min($unknownResult, $coreResult, $postResult) < 0 ? min($unknownResult, $coreResult, $postResult) : max($unknownResult, $coreResult, $postResult);
 	}
 
 	/**

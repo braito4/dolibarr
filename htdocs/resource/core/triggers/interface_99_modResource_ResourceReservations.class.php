@@ -9,7 +9,6 @@
 
 require_once DOL_DOCUMENT_ROOT.'/core/triggers/dolibarrtriggers.class.php';
 require_once DOL_DOCUMENT_ROOT.'/resource/class/resourcereservationmanager.class.php';
-require_once DOL_DOCUMENT_ROOT.'/resource/class/resourcesupplyrequestmanager.class.php';
 require_once DOL_DOCUMENT_ROOT.'/resource/class/dolresource.class.php';
 
 /**
@@ -46,40 +45,11 @@ class InterfaceResourceReservations extends DolibarrTriggers
 		if (!isModEnabled('resource')) {
 			return 0;
 		}
-		if (strpos($action, 'ORDER_SUPPLIER_') === 0) {
-			if (isModEnabled('recursosbetabr4ito')) {
-				return 0;
-			}
-			$manager = new ResourceSupplyRequestManager($this->db);
-			return $manager->handleSupplierOrderTrigger($action, (int) $object->id, $user);
-		}
-
 		if ($action === 'CONTRACT_VALIDATE') {
 			return $this->synchronizeContractReservations((int) $object->id, $user, $langs);
 		}
-		if (in_array($action, array('CONTRACT_REOPEN', 'CONTRACT_DELETE'), true)) {
-			if (isModEnabled('recursosbetabr4ito')) {
-				return 0;
-			}
-			$manager = new ResourceSupplyRequestManager($this->db);
-			return $manager->handleContractOutcome((int) $object->id, false, $user);
-		}
 		if ($action === 'PROPAL_VALIDATE') {
 			return $this->synchronizeProposalReservations((int) $object->id, $user, $langs);
-		}
-		if ($action === 'PROPAL_CLOSE_SIGNED') {
-			if (isModEnabled('recursosbetabr4ito')) {
-				return 0;
-			}
-			$manager = new ResourceSupplyRequestManager($this->db);
-			return $manager->handleProposalOutcome((int) $object->id, true, $user);
-		}
-		if (in_array($action, array('PROPAL_CLOSE_REFUSED', 'PROPAL_CANCEL', 'PROPAL_DELETE'), true)) {
-			if (isModEnabled('recursosbetabr4ito')) {
-				return 0;
-			}
-			$manager = new ResourceSupplyRequestManager($this->db);
-			return $manager->handleProposalOutcome((int) $object->id, false, $user);
 		}
 
 		$isProposal = strpos($action, 'LINEPROPAL_') === 0;
@@ -102,13 +72,6 @@ class InterfaceResourceReservations extends DolibarrTriggers
 		}
 
 		$elementType = $isProposal ? 'propaldet' : ($isOrder ? 'commandedet' : 'contratdet');
-		if ($isContract && $action === 'LINECONTRACT_CLOSE') {
-			if (isModEnabled('recursosbetabr4ito')) {
-				return 0;
-			}
-			$manager = new ResourceSupplyRequestManager($this->db);
-			return $manager->handleLineOutcome('contratdet', $lineId, false, $user);
-		}
 		if (substr($action, -7) === '_DELETE') {
 			return $this->deleteLineReservation($elementType, $lineId);
 		}
@@ -212,16 +175,6 @@ class InterfaceResourceReservations extends DolibarrTriggers
 	 */
 	private function deleteLineReservation($elementType, $lineId)
 	{
-		$sql = 'UPDATE '.MAIN_DB_PREFIX.'resource_supply_request SET request_status=CASE';
-		$sql .= " WHEN request_status IN ('confirmed','consumed') THEN 'released'";
-		$sql .= " WHEN request_status IN ('unknown','requested') THEN 'canceled'";
-		$sql .= ' ELSE request_status END, fk_element_resource=NULL';
-		$sql .= ' WHERE fk_element_resource IN (SELECT rowid FROM '.MAIN_DB_PREFIX.'element_resources';
-		$sql .= " WHERE element_type='".$this->db->escape($elementType)."' AND element_id=".((int) $lineId).')';
-		if (!$this->db->query($sql)) {
-			$this->errors[] = $this->db->lasterror();
-			return -1;
-		}
 		$sql = 'DELETE FROM '.MAIN_DB_PREFIX.'element_resources';
 		$sql .= " WHERE element_type = '".$this->db->escape($elementType)."'";
 		$sql .= ' AND element_id = '.((int) $lineId);
@@ -245,6 +198,7 @@ class InterfaceResourceReservations extends DolibarrTriggers
 	 */
 	private function synchronizeLineReservation($elementType, $line, User $user, Translate $langs, $forceConfirmed = null, $forceAvailability = false)
 	{
+		$unknownAvailabilityEnabled = (bool) getDolGlobalInt('RESOURCE_ENABLE_UNKNOWN_AVAILABILITY');
 		if ($this->deleteLineReservation($elementType, (int) $line->rowid) < 0) {
 			return -1;
 		}
@@ -257,7 +211,7 @@ class InterfaceResourceReservations extends DolibarrTriggers
 		$sql .= ' AND er.element_id = '.((int) $line->fk_product);
 		$sql .= " AND er.resource_type = 'dolresource'";
 		$sql .= " AND (er.relation_kind IS NULL OR er.relation_kind = 'requirement')";
-		$sql .= ' AND r.fk_statut IN (0, 1)';
+		$sql .= $unknownAvailabilityEnabled ? ' AND r.fk_statut IN (0, 1)' : ' AND r.fk_statut = 1';
 		$sql .= ' ORDER BY er.requirement_group, er.position, er.rowid';
 		$resql = $this->db->query($sql);
 		if (!$resql || !$this->db->num_rows($resql)) {
@@ -493,16 +447,9 @@ class InterfaceResourceReservations extends DolibarrTriggers
 			if (!empty($splitAssignments)) {
 				foreach ($splitAssignments as $splitAssignment) {
 					$reservationStatus = $isConfirmed ? ResourceReservationManager::STATUS_CONFIRMED : ResourceReservationManager::STATUS_PROVISIONAL;
-					if ($forceAvailability && (int) $splitAssignment->resource_status === Dolresource::STATUS_UNKNOWN) {
-						$reservationStatus = ResourceReservationManager::STATUS_AWAITING_SUPPLY;
-					}
 					$assignmentId = $this->insertAssignment($elementType, $line, $splitAssignment, 1.0, $reservationStatus, $user);
 					if (!$assignmentId) {
 						$this->deleteLineReservation($elementType, (int) $line->rowid);
-						return -1;
-					}
-					if ($reservationStatus === ResourceReservationManager::STATUS_AWAITING_SUPPLY
-						&& $this->createSupplyRequest($assignmentId, $line, $splitAssignment, $user) < 0) {
 						return -1;
 					}
 					$capacityKey = ((int) $splitAssignment->resource_id).'|'.$splitAssignment->assignment_start.'|'.$splitAssignment->assignment_end;
@@ -524,15 +471,8 @@ class InterfaceResourceReservations extends DolibarrTriggers
 				$commonEnd = $selected->assignment_end;
 			}
 			$reservationStatus = $isConfirmed ? ResourceReservationManager::STATUS_CONFIRMED : ResourceReservationManager::STATUS_PROVISIONAL;
-			if ($forceAvailability && (int) $selected->resource_status === Dolresource::STATUS_UNKNOWN) {
-				$reservationStatus = ResourceReservationManager::STATUS_AWAITING_SUPPLY;
-			}
 			$assignmentId = $this->insertAssignment($elementType, $line, $selected, (float) $line->qty, $reservationStatus, $user);
 			if (!$assignmentId) {
-				return -1;
-			}
-			if ($reservationStatus === ResourceReservationManager::STATUS_AWAITING_SUPPLY
-				&& $this->createSupplyRequest($assignmentId, $line, $selected, $user) < 0) {
 				return -1;
 			}
 			$capacityKey = ((int) $selected->resource_id).'|'.$selected->assignment_start.'|'.$selected->assignment_end;
@@ -540,41 +480,6 @@ class InterfaceResourceReservations extends DolibarrTriggers
 			$plannedUnits[$capacityKey] = ($plannedUnits[$capacityKey] ?? 0) + (int) $selected->resource_units_used;
 		}
 		return 1;
-	}
-
-	/**
-	 * Create the confirmation request for an assignment using an unknown resource.
-	 *
-	 * @param int    $assignmentId Assignment id
-	 * @param object $line         Source service line
-	 * @param object $selected     Selected resource requirement
-	 * @param User   $user         Acting user
-	 * @return int Request id, negative on error
-	 */
-	private function createSupplyRequest($assignmentId, $line, $selected, User $user)
-	{
-		$supplierId = 0;
-		$sql = 'SELECT fk_soc FROM '.MAIN_DB_PREFIX.'product_fournisseur_price';
-		$sql .= ' WHERE fk_product='.((int) $line->fk_product).' AND entity IN ('.getEntity('productprice').')';
-		$sql .= ' ORDER BY rowid ASC';
-		$sql .= $this->db->plimit(1);
-		$resql = $this->db->query($sql);
-		if ($resql && ($supplier = $this->db->fetch_object($resql))) {
-			$supplierId = (int) $supplier->fk_soc;
-		}
-		$manager = new ResourceSupplyRequestManager($this->db);
-		return $manager->create(array(
-			'entity' => getEntity('resource'),
-			'fk_element_resource' => $assignmentId,
-			'fk_resource' => (int) $selected->resource_id,
-			'request_type' => $supplierId > 0 ? 'supplier' : 'owner',
-			'fk_soc_supplier' => $supplierId,
-			'fk_product_supplier' => (int) $line->fk_product,
-			'quantity_requested' => max(1, (int) $selected->resource_units_used),
-			'date_start' => (string) $selected->assignment_start,
-			'date_end' => (string) $selected->assignment_end,
-			'timezone' => getDolGlobalString('MAIN_TIMEZONE', 'UTC'),
-		), $user);
 	}
 
 	/**
