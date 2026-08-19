@@ -21,4 +21,5 @@ ALTER TABLE llx_element_resources ADD UNIQUE INDEX idx_element_resources_idx1 (r
 ALTER TABLE llx_element_resources ADD INDEX idx_element_element_element_id (element_id);
 ALTER TABLE llx_element_resources ADD INDEX idx_element_resources_requirement (element_type, element_id, relation_kind, position);
 ALTER TABLE llx_element_resources ADD INDEX idx_element_resources_booking (resource_type, resource_id, relation_kind, reservation_status, date_start, date_end);
+ALTER TABLE llx_element_resources ADD INDEX idx_element_resources_future_booking (resource_type, resource_id, reservation_status, date_end, date_start);
 -- Pas de contraite sur resource_id et element_id car pointe sur differentes tables

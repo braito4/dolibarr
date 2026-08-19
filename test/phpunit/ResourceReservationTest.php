@@ -757,6 +757,29 @@ class ResourceReservationTest extends TestCase
 		$this->assertSame(ResourceReservationManager::STATUS_AWAITING_SUPPLY, $this->fetchReservation('propaldet', 99881)->reservation_status);
 	}
 
+	/**
+	 * Bulk availability loading ignores reservations that ended in the past.
+	 *
+	 * @return void
+	 */
+	public function testBulkAvailabilityOnlyLoadsRequestedFutureWindow(): void
+	{
+		$this->insertReservation($this->firstResourceId, 'contratdet', 99891, 5.0, 'confirmed', '2025-01-01 08:00:00', '2025-01-02 08:00:00');
+		$this->insertReservation($this->firstResourceId, 'contratdet', 99892, 2.0, 'confirmed', '2026-10-10 09:00:00', '2026-10-10 10:00:00');
+		$this->insertReservation($this->secondResourceId, 'contratdet', 99893, 1.0, 'confirmed', '2026-11-10 09:00:00', '2026-11-10 10:00:00');
+		$manager = new ResourceReservationManager($this->db);
+		$assignments = $manager->loadConfirmedAssignments(
+			'dolresource',
+			array($this->firstResourceId, $this->secondResourceId),
+			'2026-10-10 08:00:00',
+			'2026-10-11 08:00:00'
+		);
+
+		$this->assertCount(1, $assignments[$this->firstResourceId]);
+		$this->assertArrayNotHasKey($this->secondResourceId, $assignments);
+		$this->assertEquals(2.0, $manager->getOccupiedCapacityFromAssignments($assignments, $this->firstResourceId, '2026-10-10 08:00:00', '2026-10-11 08:00:00'));
+	}
+
 	/** @return int */
 	private function createResource($ref, $capacity)
 	{

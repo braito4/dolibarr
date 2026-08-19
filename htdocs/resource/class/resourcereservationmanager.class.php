@@ -137,13 +137,27 @@ class ResourceReservationManager
 			while ($resql && ($rule = $this->db->fetch_array($resql))) {
 				$rules[] = $rule;
 			}
+			if ($maximumCapacity === null) {
+				$sql = 'SELECT r.max_users, r.fk_statut, ty.capacity_mode FROM '.MAIN_DB_PREFIX.'resource r';
+				$sql .= ' LEFT JOIN '.MAIN_DB_PREFIX.'c_type_resource ty ON ty.code = r.fk_code_type_resource';
+				$sql .= ' WHERE r.rowid = '.((int) $resourceId);
+				$resource = $this->db->fetch_object($this->db->query($sql));
+				if (!$resource || (int) $resource->fk_statut !== 1) {
+					return null;
+				}
+				$maximumCapacity = ($resource->capacity_mode === 'users') ? (float) $resource->max_users : 1.0;
+			}
 		}
+		if ($maximumCapacity === null) {
+			$maximumCapacity = 1.0;
+		}
+		$assignments = $this->loadConfirmedAssignments($resourceType, array($resourceId), $this->db->idate($earliestStart), $this->db->idate($latestEnd));
 		$cursor = (int) (ceil($earliestStart / 900) * 900);
 		$durationSeconds = $durationMinutes * 60;
 		while ($cursor + $durationSeconds <= $latestEnd) {
 			$end = $cursor + $durationSeconds;
-			if ($this->matchesOpeningRule($cursor, $end, $rules)
-				&& $this->canReserve($resourceType, $resourceId, $this->db->idate($cursor), $this->db->idate($end), $capacity, $maximumCapacity)) {
+			$occupied = $this->getOccupiedCapacityFromAssignments($assignments, $resourceId, $this->db->idate($cursor), $this->db->idate($end));
+			if ($this->matchesOpeningRule($cursor, $end, $rules) && ($occupied + $capacity) <= $maximumCapacity) {
 				return array('date_start' => $this->db->idate($cursor), 'date_end' => $this->db->idate($end));
 			}
 			$cursor += 900;
@@ -202,6 +216,61 @@ class ResourceReservationManager
 		$resql = $this->db->query($sql);
 		$obj = $resql ? $this->db->fetch_object($resql) : null;
 		return $obj ? (float) $obj->occupied : 0.0;
+	}
+
+	/**
+	 * Load confirmed assignments for many resources using one future-bounded query.
+	 *
+	 * @param string     $resourceType Resource type
+	 * @param array<int> $resourceIds  Resource ids
+	 * @param string     $dateStart    Earliest requested date
+	 * @param string     $dateEnd      Latest requested date
+	 * @return array<int,array<int,array{date_start:?string,date_end:?string,capacity:float}>>
+	 */
+	public function loadConfirmedAssignments($resourceType, array $resourceIds, $dateStart, $dateEnd)
+	{
+		$resourceIds = array_values(array_unique(array_filter(array_map('intval', $resourceIds))));
+		$assignments = array();
+		if (empty($resourceIds) || empty($dateStart) || empty($dateEnd) || $dateStart >= $dateEnd) {
+			return $assignments;
+		}
+		$sql = 'SELECT resource_id, date_start, date_end, capacity_used FROM '.MAIN_DB_PREFIX.'element_resources';
+		$sql .= ' WHERE resource_id IN ('.implode(',', $resourceIds).')';
+		$sql .= " AND resource_type = '".$this->db->escape($resourceType)."'";
+		$sql .= " AND reservation_status = 'confirmed'";
+		$sql .= " AND (relation_kind = 'assignment' OR relation_kind IS NULL)";
+		$sql .= " AND (date_end IS NULL OR date_end > '".$this->db->escape($dateStart)."')";
+		$sql .= " AND (date_start IS NULL OR date_start < '".$this->db->escape($dateEnd)."')";
+		$resql = $this->db->query($sql);
+		while ($resql && ($row = $this->db->fetch_object($resql))) {
+			$assignments[(int) $row->resource_id][] = array(
+				'date_start' => $row->date_start,
+				'date_end' => $row->date_end,
+				'capacity' => $row->capacity_used === null ? 1.0 : (float) $row->capacity_used,
+			);
+		}
+		return $assignments;
+	}
+
+	/**
+	 * Sum overlapping capacity from a previously loaded assignment index.
+	 *
+	 * @param array<int,array<int,array{date_start:?string,date_end:?string,capacity:float}>> $assignments Assignment index
+	 * @param int    $resourceId Resource id
+	 * @param string $dateStart  Requested start
+	 * @param string $dateEnd    Requested end
+	 * @return float
+	 */
+	public function getOccupiedCapacityFromAssignments(array $assignments, $resourceId, $dateStart, $dateEnd)
+	{
+		$occupied = 0.0;
+		foreach ($assignments[(int) $resourceId] ?? array() as $assignment) {
+			if (($assignment['date_end'] === null || $assignment['date_end'] > $dateStart)
+				&& ($assignment['date_start'] === null || $assignment['date_start'] < $dateEnd)) {
+				$occupied += $assignment['capacity'];
+			}
+		}
+		return $occupied;
 	}
 
 	/**

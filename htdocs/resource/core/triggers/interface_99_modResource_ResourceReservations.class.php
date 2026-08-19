@@ -257,6 +257,22 @@ class InterfaceResourceReservations extends DolibarrTriggers
 			}
 			$commonEnd = $this->db->idate($this->db->jdate($commonStart) + ($duration * 60));
 		}
+		$confirmedAssignments = array();
+		$plannedCapacity = array();
+		$bulkAvailabilityLoaded = false;
+		if ($checkAvailability && !empty($commonStart) && !empty($commonEnd)) {
+			$resourceIds = array();
+			$maximumCooldown = 0;
+			foreach ($groups as $availabilityAlternatives) {
+				foreach ($availabilityAlternatives as $availabilityRequirement) {
+					$resourceIds[] = (int) $availabilityRequirement->resource_id;
+					$maximumCooldown = max($maximumCooldown, (int) $availabilityRequirement->cooldown_minutes);
+				}
+			}
+			$loadEnd = $this->db->idate($this->db->jdate($commonEnd) + ($maximumCooldown * 60));
+			$confirmedAssignments = $manager->loadConfirmedAssignments('dolresource', $resourceIds, $commonStart, $loadEnd);
+			$bulkAvailabilityLoaded = true;
+		}
 		foreach ($groups as $alternatives) {
 			$selected = null;
 			foreach ($alternatives as $preference) {
@@ -285,9 +301,15 @@ class InterfaceResourceReservations extends DolibarrTriggers
 					continue;
 				}
 				$fitsResourceCapacity = $capacityUsed > 0 && $capacityUsed <= $maximumCapacity;
-				$canAllocate = !$checkAvailability
-					? $fitsResourceCapacity
-					: ((!empty($dateStart) && !empty($dateEnd)) && $manager->canReserve('dolresource', (int) $preference->resource_id, $dateStart, $dateEnd, $capacityUsed, $maximumCapacity));
+				$capacityKey = ((int) $preference->resource_id).'|'.$dateStart.'|'.$dateEnd;
+				$occupied = 0.0;
+				if ($checkAvailability && !empty($dateStart) && !empty($dateEnd)) {
+					$occupied = $bulkAvailabilityLoaded
+						? $manager->getOccupiedCapacityFromAssignments($confirmedAssignments, (int) $preference->resource_id, $dateStart, $dateEnd)
+						: $manager->getOccupiedCapacity('dolresource', (int) $preference->resource_id, $dateStart, $dateEnd);
+					$occupied += $plannedCapacity[$capacityKey] ?? 0.0;
+				}
+				$canAllocate = !$checkAvailability ? $fitsResourceCapacity : ($fitsResourceCapacity && !empty($dateStart) && !empty($dateEnd) && ($occupied + $capacityUsed) <= $maximumCapacity);
 				if ($canAllocate) {
 					$selected = $preference;
 					$selected->capacity_used = $capacityUsed;
@@ -319,8 +341,15 @@ class InterfaceResourceReservations extends DolibarrTriggers
 							continue;
 						}
 						$resourceId = (int) $preference->resource_id;
-						$alreadyStaged = isset($stagedCapacity[$resourceId]) ? $stagedCapacity[$resourceId] : 0.0;
-						$occupied = $checkAvailability ? $manager->getOccupiedCapacity('dolresource', $resourceId, $dateStart, $dateEnd) : 0.0;
+						$capacityKey = $resourceId.'|'.$dateStart.'|'.$dateEnd;
+						$alreadyStaged = isset($stagedCapacity[$capacityKey]) ? $stagedCapacity[$capacityKey] : 0.0;
+						$occupied = 0.0;
+						if ($checkAvailability) {
+							$occupied = $bulkAvailabilityLoaded
+								? $manager->getOccupiedCapacityFromAssignments($confirmedAssignments, $resourceId, $dateStart, $dateEnd)
+								: $manager->getOccupiedCapacity('dolresource', $resourceId, $dateStart, $dateEnd);
+							$occupied += $plannedCapacity[$capacityKey] ?? 0.0;
+						}
 						if (($occupied + $alreadyStaged + $capacityUsed) > $maximumCapacity) {
 							continue;
 						}
@@ -328,7 +357,7 @@ class InterfaceResourceReservations extends DolibarrTriggers
 						$unitSelection->capacity_used = $capacityUsed;
 						$unitSelection->assignment_start = $dateStart;
 						$unitSelection->assignment_end = $dateEnd;
-						$stagedCapacity[$resourceId] = $alreadyStaged + $capacityUsed;
+						$stagedCapacity[$capacityKey] = $alreadyStaged + $capacityUsed;
 						break;
 					}
 					if (!$unitSelection) {
@@ -344,6 +373,8 @@ class InterfaceResourceReservations extends DolibarrTriggers
 						$this->deleteLineReservation($elementType, (int) $line->rowid);
 						return -1;
 					}
+					$capacityKey = ((int) $splitAssignment->resource_id).'|'.$splitAssignment->assignment_start.'|'.$splitAssignment->assignment_end;
+					$plannedCapacity[$capacityKey] = ($plannedCapacity[$capacityKey] ?? 0.0) + (float) $splitAssignment->capacity_used;
 				}
 				continue;
 			}
@@ -362,6 +393,8 @@ class InterfaceResourceReservations extends DolibarrTriggers
 			if (!$this->insertAssignment($elementType, $line, $selected, (float) $line->qty, $isConfirmed, $user)) {
 				return -1;
 			}
+			$capacityKey = ((int) $selected->resource_id).'|'.$selected->assignment_start.'|'.$selected->assignment_end;
+			$plannedCapacity[$capacityKey] = ($plannedCapacity[$capacityKey] ?? 0.0) + (float) $selected->capacity_used;
 		}
 		return 1;
 	}
