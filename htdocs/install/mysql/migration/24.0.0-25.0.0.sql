@@ -92,6 +92,8 @@ ALTER TABLE llx_c_type_resource ADD COLUMN metric_label varchar(128) DEFAULT NUL
 ALTER TABLE llx_c_type_resource ADD COLUMN metric_unit varchar(32) DEFAULT NULL;
 ALTER TABLE llx_c_type_resource ADD COLUMN supports_cooldown smallint NOT NULL DEFAULT 0;
 ALTER TABLE llx_resource ADD COLUMN metric_value real DEFAULT NULL;
+ALTER TABLE llx_resource ADD COLUMN max_payload_weight real DEFAULT NULL;
+ALTER TABLE llx_resource ADD COLUMN operational_location varchar(255) DEFAULT NULL;
 ALTER TABLE llx_resource ADD COLUMN cooldown_minutes integer NOT NULL DEFAULT 0;
 UPDATE llx_c_type_resource SET capacity_mode = 'users' WHERE code = 'RES_ROOMS';
 UPDATE llx_c_type_resource SET capacity_mode = 'volume', metric_label = 'Load volume', metric_unit = 'm3' WHERE code = 'RES_CARS';
@@ -117,6 +119,7 @@ ALTER TABLE llx_element_resources ADD COLUMN allow_split smallint NOT NULL DEFAU
 ALTER TABLE llx_element_resources ADD COLUMN context_scope varchar(16) NOT NULL DEFAULT 'service_line';
 ALTER TABLE llx_element_resources ADD COLUMN demand_source varchar(16) NOT NULL DEFAULT 'service_quantity';
 ALTER TABLE llx_element_resources ADD COLUMN capacity_metrics varchar(32) NOT NULL DEFAULT 'units';
+ALTER TABLE llx_element_resources ADD COLUMN required_location varchar(255) DEFAULT NULL;
 ALTER TABLE llx_element_resources ADD COLUMN selection_policy varchar(24) NOT NULL DEFAULT 'preference_order';
 UPDATE llx_element_resources SET requirement_group = 'legacy_default', mandatory = 1 WHERE element_type IN ('product', 'service');
 ALTER TABLE llx_element_resources ADD INDEX idx_element_resources_requirement (element_type, element_id, relation_kind, position);

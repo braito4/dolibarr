@@ -63,6 +63,8 @@ $email					= GETPOST('email', 'alpha');
 $max_users				= GETPOSTINT('max_users');
 $allow_overflow			= GETPOSTINT('allow_overflow');
 $metric_value			= GETPOST('metric_value', 'alpha');
+$max_payload_weight		= GETPOST('max_payload_weight', 'alpha');
+$operational_location	= GETPOST('operational_location', 'alphanohtml');
 $cooldown_minutes		= GETPOSTINT('cooldown_minutes');
 $url					= GETPOST('url', 'alpha');
 $confirm				= GETPOST('confirm', 'aZ09');
@@ -136,6 +138,8 @@ if (empty($reshook)) {
 				$object->max_users				= $max_users;
 				$object->allow_overflow			= $allow_overflow ? 1 : 0;
 				$object->metric_value			= ($metric_value !== '' ? (float) price2num($metric_value, 'MS') : null);
+				$object->max_payload_weight		= ($max_payload_weight !== '' ? (float) price2num($max_payload_weight, 'MS') : null);
+				$object->operational_location	= $operational_location;
 				$object->cooldown_minutes		= max(0, $cooldown_minutes);
 				$object->url					= $url;
 				$object->fk_code_type_resource	= $fk_code_type_resource;
@@ -190,6 +194,8 @@ if (empty($reshook)) {
 				$object->max_users				= $max_users;
 				$object->allow_overflow			= $allow_overflow ? 1 : 0;
 				$object->metric_value			= ($metric_value !== '' ? (float) price2num($metric_value, 'MS') : null);
+				$object->max_payload_weight		= ($max_payload_weight !== '' ? (float) price2num($max_payload_weight, 'MS') : null);
+				$object->operational_location	= $operational_location;
 				$object->cooldown_minutes		= max(0, $cooldown_minutes);
 				$object->url					= $url;
 				$object->fk_code_type_resource  = $fk_code_type_resource;
@@ -405,9 +411,14 @@ if ($action == 'create' || $object->fetch($id, $ref) > 0) {
 
 		print '<tr class="resource-model-metric"><td><span id="resource_metric_label">'.$langs->trans('ResourceMetricValue').'</span></td><td>';
 		print '<input type="text" class="width100 right" name="metric_value" value="'.dol_escape_htmltag(GETPOSTISSET('metric_value') ? $metric_value : $object->metric_value).'"> <span id="resource_metric_unit"></span></td></tr>';
+		print '<tr class="resource-model-volume"><td>'.$langs->trans('ResourceMaxPayloadWeight').'</td><td>';
+		print '<input type="text" class="width100 right" name="max_payload_weight" value="'.dol_escape_htmltag(GETPOSTISSET('max_payload_weight') ? $max_payload_weight : $object->max_payload_weight).'"> kg</td></tr>';
+		print '<tr><td>'.$langs->trans('ResourceOperationalLocation').'</td><td>';
+		print '<input type="text" class="minwidth300" name="operational_location" value="'.dol_escape_htmltag(GETPOSTISSET('operational_location') ? $operational_location : $object->operational_location).'">';
+		print '</td></tr>';
 		print '<tr class="resource-model-cooldown"><td>'.$langs->trans('ResourceCooldownMinutes').'</td><td>';
 		print '<input type="number" min="0" class="width75" name="cooldown_minutes" value="'.(GETPOSTISSET('cooldown_minutes') ? $cooldown_minutes : (int) $object->cooldown_minutes).'"> '.$langs->trans('Minutes').'</td></tr>';
-		print '<script>jQuery(function(){var models='.json_encode($typeModels).'; function toggleModelFields(selector, visible){jQuery(selector).toggle(visible).find(":input").prop("disabled", !visible);} function applyResourceModel(){var model=models[jQuery("#selectfk_code_type_resource").val()] || {capacity_mode:"none",supports_cooldown:0}; toggleModelFields(".resource-model-users", model.capacity_mode === "users"); toggleModelFields(".resource-model-metric", model.capacity_mode === "custom" || model.capacity_mode === "volume"); toggleModelFields(".resource-model-cooldown", !!model.supports_cooldown); jQuery("#resource_metric_label").text(model.metric_label || '.json_encode($langs->transnoentities('ResourceMetricValue')).'); jQuery("#resource_metric_unit").text(model.metric_unit || "");} jQuery("#selectfk_code_type_resource").on("change", applyResourceModel); applyResourceModel();});</script>';
+		print '<script>jQuery(function(){var models='.json_encode($typeModels).'; function toggleModelFields(selector, visible){jQuery(selector).toggle(visible).find(":input").prop("disabled", !visible);} function applyResourceModel(){var model=models[jQuery("#selectfk_code_type_resource").val()] || {capacity_mode:"none",supports_cooldown:0}; toggleModelFields(".resource-model-users", model.capacity_mode === "users"); toggleModelFields(".resource-model-metric", model.capacity_mode === "custom" || model.capacity_mode === "volume"); toggleModelFields(".resource-model-volume", model.capacity_mode === "volume"); toggleModelFields(".resource-model-cooldown", !!model.supports_cooldown); jQuery("#resource_metric_label").text(model.metric_label || '.json_encode($langs->transnoentities('ResourceMetricValue')).'); jQuery("#resource_metric_unit").text(model.metric_unit || "");} jQuery("#selectfk_code_type_resource").on("change", applyResourceModel); applyResourceModel();});</script>';
 
 		// URL
 		print '<tr><td>'.$form->editfieldkey('URL', 'url', '', $object, 0).'</td>';
@@ -483,6 +494,12 @@ if ($action == 'create' || $object->fetch($id, $ref) > 0) {
 
 		if ($object->metric_value !== null) {
 			print '<tr><td>'.dol_escape_htmltag($object->metric_label ?: $langs->trans('ResourceMetricValue')).'</td><td>'.price($object->metric_value).' '.dol_escape_htmltag($object->metric_unit ?: '').'</td></tr>';
+		}
+		if ($object->capacity_mode === 'volume' && $object->max_payload_weight !== null) {
+			print '<tr><td>'.$langs->trans('ResourceMaxPayloadWeight').'</td><td>'.price($object->max_payload_weight).' kg</td></tr>';
+		}
+		if (!empty($object->operational_location)) {
+			print '<tr><td>'.$langs->trans('ResourceOperationalLocation').'</td><td>'.dol_escape_htmltag($object->operational_location).'</td></tr>';
 		}
 		if ($object->cooldown_minutes > 0) {
 			print '<tr><td>'.$langs->trans('ResourceCooldownMinutes').'</td><td>'.((int) $object->cooldown_minutes).' '.$langs->trans('Minutes').'</td></tr>';

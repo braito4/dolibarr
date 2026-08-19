@@ -95,6 +95,7 @@ $allow_split            = GETPOSTINT('allow_split');
 $context_scope          = GETPOST('context_scope', 'alpha') ?: 'service_line';
 $demand_source          = GETPOST('demand_source', 'alpha') ?: 'service_quantity';
 $capacity_metrics       = GETPOST('capacity_metrics', 'alpha') ?: 'units';
+$required_location      = GETPOST('required_location', 'alphanohtml');
 $selection_policy       = GETPOST('selection_policy', 'alpha') ?: 'preference_order';
 
 $allowedResourceRoles = array('capacity', 'production', 'delivery', 'equipment', 'operator');
@@ -104,7 +105,7 @@ $allowedEndInputModes = array('none', 'date', 'datetime', 'calculated');
 $allowedTimePrecisions = array('day', 'hour', 'minute', 'second');
 $allowedContextScopes = array('service_line', 'same_proposal');
 $allowedDemandSources = array('service_quantity', 'product_lines');
-$allowedCapacityMetrics = array('units', 'volume');
+$allowedCapacityMetrics = array('units', 'volume', 'volume_weight');
 $allowedSelectionPolicies = array('preference_order', 'smallest_sufficient');
 if (!in_array($resource_role, $allowedResourceRoles, true)) {
 	$resource_role = 'capacity';
@@ -304,6 +305,7 @@ if (empty($reshook)) {
 					'context_scope' => $context_scope,
 					'demand_source' => $demand_source,
 					'capacity_metrics' => $capacity_metrics,
+					'required_location' => $required_location,
 					'selection_policy' => $selection_policy,
 				);
 				$res = $objstat->add_element_resource($resource_id, $resource_type, $busy, $mandatory, 0, 0, $users_per_service_unit, $requirement);
@@ -347,6 +349,7 @@ if (empty($reshook)) {
 					$object->context_scope = $context_scope;
 					$object->demand_source = $demand_source;
 					$object->capacity_metrics = $capacity_metrics;
+					$object->required_location = $required_location;
 					$object->selection_policy = $selection_policy;
 				}
 			}

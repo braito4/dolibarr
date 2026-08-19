@@ -45,6 +45,7 @@ CREATE TABLE llx_element_resources
 	context_scope	  varchar(16) NOT NULL DEFAULT 'service_line',
 	demand_source	  varchar(16) NOT NULL DEFAULT 'service_quantity',
 	capacity_metrics varchar(32) NOT NULL DEFAULT 'units',
+	required_location varchar(255) DEFAULT NULL,
 	selection_policy varchar(24) NOT NULL DEFAULT 'preference_order',
 	service_quantity real DEFAULT NULL,
 	service_duration varchar(16) DEFAULT NULL,
