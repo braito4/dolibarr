@@ -16,11 +16,12 @@ $documentRoot = is_file(dirname(__FILE__).'/../../htdocs/master.inc.php')
 require_once $documentRoot.'/master.inc.php';
 require_once $documentRoot.'/resource/class/dolresource.class.php';
 require_once $documentRoot.'/resource/class/resourcereservationmanager.class.php';
-require_once $documentRoot.'/custom/recursos-beta-br4ito/class/resourceexternalavailabilitymanager.class.php';
 require_once $documentRoot.'/resource/core/triggers/interface_99_modResource_ResourceReservations.class.php';
-require_once $documentRoot.'/custom/recursos-beta-br4ito/core/triggers/interface_98_modResourceExternalAvailability_ExternalAvailabilityTriggers.class.php';
-require_once $documentRoot.'/custom/recursos-beta-br4ito/core/triggers/interface_100_modResourceExternalAvailability_ExternalAvailabilityRequestTriggers.class.php';
 require_once $documentRoot.'/bookcal/class/bookcalavailabilityprovider.class.php';
+
+$externalAvailabilityTestSupport = dol_include_once('/custom/resourceexternalavailability/class/resourceexternalavailabilitymanager.class.php');
+$externalAvailabilityTestSupport = $externalAvailabilityTestSupport && dol_include_once('/custom/resourceexternalavailability/core/triggers/interface_98_modResourceExternalAvailability_ExternalAvailabilityTriggers.class.php');
+$externalAvailabilityTestSupport = $externalAvailabilityTestSupport && dol_include_once('/custom/resourceexternalavailability/core/triggers/interface_100_modResourceExternalAvailability_ExternalAvailabilityRequestTriggers.class.php');
 
 if (empty($user->id)) {
 	$user->fetch(1);
@@ -65,14 +66,14 @@ class ResourceReservationTest extends TestCase
 	 */
 	public static function setUpBeforeClass(): void
 	{
-		global $conf, $db;
+		global $conf, $db, $externalAvailabilityTestSupport;
 		if (!isModEnabled('resource')) {
 			require_once DOL_DOCUMENT_ROOT.'/core/lib/admin.lib.php';
 			$result = activateModule('modResource');
 			self::assertEmpty($result['errors'], implode(', ', $result['errors']));
 			$conf->setValues($db);
 		}
-		if (!isModEnabled('resourceexternalavailability')) {
+		if ($externalAvailabilityTestSupport && !isModEnabled('resourceexternalavailability')) {
 			require_once DOL_DOCUMENT_ROOT.'/core/lib/admin.lib.php';
 			$result = activateModule('modResourceExternalAvailability');
 			self::assertEmpty($result['errors'], implode(', ', $result['errors']));
@@ -87,7 +88,10 @@ class ResourceReservationTest extends TestCase
 	 */
 	protected function setUp(): void
 	{
-		global $db;
+		global $db, $externalAvailabilityTestSupport;
+		if (!$externalAvailabilityTestSupport) {
+			$this->markTestSkipped('Optional ResourceExternalAvailability module is not installed.');
+		}
 		$this->db = $db;
 		$this->db->begin();
 		$this->trigger = new InterfaceResourceReservations($this->db);
