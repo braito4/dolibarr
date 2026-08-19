@@ -86,7 +86,7 @@ if ($element != 'product' && $element != 'service') {
 	$out .= '</div>';
 	$roleOptions = array('capacity' => $langs->trans('ResourceRoleCapacity'), 'production' => $langs->trans('ResourceRoleProduction'), 'delivery' => $langs->trans('ResourceRoleDelivery'), 'equipment' => $langs->trans('ResourceRoleEquipment'), 'operator' => $langs->trans('ResourceRoleOperator'));
 	$schedulingOptions = array('same_as_parent' => $langs->trans('SchedulingSameAsParent'), 'fixed' => $langs->trans('SchedulingFixed'), 'next_available' => $langs->trans('SchedulingNextAvailable'), 'within_window' => $langs->trans('SchedulingWithinWindow'), 'manual' => $langs->trans('SchedulingManual'));
-	$startInputOptions = array('none' => $langs->trans('TimeInputNone'), 'date' => $langs->trans('TimeInputDate'), 'datetime' => $langs->trans('TimeInputDateTime'));
+$startInputOptions = array('none' => $langs->trans('TimeInputNone'), 'date' => $langs->trans('TimeInputDate'), 'datetime' => $langs->trans('TimeInputDatetime'));
 	$endInputOptions = $startInputOptions + array('calculated' => $langs->trans('TimeInputCalculated'));
 	$precisionOptions = array('day' => $langs->trans('TimePrecisionDay'), 'hour' => $langs->trans('TimePrecisionHour'), 'minute' => $langs->trans('TimePrecisionMinute'), 'second' => $langs->trans('TimePrecisionSecond'));
 	$out .= '<div class="divsearchfield paddingtop paddingbottom valignmiddle inline-block"><label for="resource_role">'.$resourceHelpLabel('ResourceRole').'</label> '.$form->selectarray('resource_role', $roleOptions, GETPOST('resource_role', 'alpha') ?: 'capacity').'</div>';

@@ -446,7 +446,7 @@ if ($action == 'create' || $object->fetch($id, $ref) > 0) {
 		print '<tr class="resource-model-custom"><td><span id="resource_metric_label">'.$langs->trans('ResourceMetricValue').'</span></td><td>';
 		print '<input type="text" class="width100 right" name="metric_value" value="'.dol_escape_htmltag(GETPOSTISSET('metric_value') ? $metric_value : $object->metric_value).'"> <span id="resource_metric_unit"></span></td></tr>';
 		print '<tr class="resource-model-cooldown"><td>'.$langs->trans('ResourceCooldownMinutes').'</td><td>';
-		print '<input type="number" min="0" class="width75" name="cooldown_minutes" value="'.(GETPOSTISSET('cooldown_minutes') ? $cooldown_minutes : (int) $object->cooldown_minutes).'"> '.$langs->trans('minutes').'</td></tr>';
+	print '<input type="number" min="0" class="width75" name="cooldown_minutes" value="'.(GETPOSTISSET('cooldown_minutes') ? $cooldown_minutes : (int) $object->cooldown_minutes).'"> '.$langs->trans('Minutes').'</td></tr>';
 		print '<script>jQuery(function(){var models='.json_encode($typeModels).'; function toggleModelFields(selector, visible){jQuery(selector).toggle(visible).find(":input").prop("disabled", !visible);} function applyResourceModel(){var model=models[jQuery("#selectfk_code_type_resource").val()] || {capacity_mode:"none",supports_cooldown:0}; toggleModelFields(".resource-model-users", model.capacity_mode === "users"); toggleModelFields(".resource-model-custom", model.capacity_mode === "custom"); toggleModelFields(".resource-model-cooldown", !!model.supports_cooldown); jQuery("#resource_metric_label").text(model.metric_label || '.json_encode($langs->transnoentities('ResourceMetricValue')).'); jQuery("#resource_metric_unit").text(model.metric_unit || "");} jQuery("#selectfk_code_type_resource").on("change", applyResourceModel); applyResourceModel();});</script>';
 
 		// URL
@@ -525,7 +525,7 @@ if ($action == 'create' || $object->fetch($id, $ref) > 0) {
 			print '<tr><td>'.dol_escape_htmltag($object->metric_label ?: $langs->trans('ResourceMetricValue')).'</td><td>'.price($object->metric_value).' '.dol_escape_htmltag($object->metric_unit).'</td></tr>';
 		}
 		if ($object->cooldown_minutes > 0) {
-			print '<tr><td>'.$langs->trans('ResourceCooldownMinutes').'</td><td>'.((int) $object->cooldown_minutes).' '.$langs->trans('minutes').'</td></tr>';
+	print '<tr><td>'.$langs->trans('ResourceCooldownMinutes').'</td><td>'.((int) $object->cooldown_minutes).' '.$langs->trans('Minutes').'</td></tr>';
 		}
 
 		// Other attributes

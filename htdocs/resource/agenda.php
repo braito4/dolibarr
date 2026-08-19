@@ -206,7 +206,7 @@ if ($object->id > 0) {
 	print '<th>'.$langs->trans('Service').'</th>';
 	print '<th class="right">'.$langs->trans('Qty').'</th>';
 	print '<th>'.$langs->trans('ServiceDuration').'</th>';
-	print '<th class="right">'.$langs->trans('Capacity').'</th>';
+	print '<th class="right">'.$langs->trans('ResourceRoleCapacity').'</th>';
 	print '<th>'.$langs->trans('DateStart').'</th>';
 	print '<th>'.$langs->trans('DateEnd').'</th>';
 	print '<th>'.$langs->trans('Status').'</th>';
