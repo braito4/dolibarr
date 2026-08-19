@@ -70,20 +70,25 @@ class ResourceReservationManager extends ResourceRequirementManager
 	 */
 	public function calculateDocumentProductVolume($elementType, $parentId)
 	{
-		$tableMap = array(
-			'propaldet' => array('table' => 'propaldet', 'parent' => 'fk_propal'),
-			'commandedet' => array('table' => 'commandedet', 'parent' => 'fk_commande'),
-			'contratdet' => array('table' => 'contratdet', 'parent' => 'fk_contrat'),
-		);
-		if (empty($tableMap[$elementType]) || $parentId <= 0) {
+		if ($parentId <= 0) {
 			return 0.0;
 		}
 
-		$mapping = $tableMap[$elementType];
-		$sql = 'SELECT d.qty, p.volume, p.volume_units';
-		$sql .= ' FROM '.MAIN_DB_PREFIX.$mapping['table'].' d';
-		$sql .= ' INNER JOIN '.MAIN_DB_PREFIX.'product p ON p.rowid = d.fk_product';
-		$sql .= ' WHERE d.'.$mapping['parent'].' = '.((int) $parentId);
+		if ($elementType === 'propaldet') {
+			$sql = 'SELECT d.qty, p.volume, p.volume_units FROM '.MAIN_DB_PREFIX.'propaldet d';
+			$sql .= ' INNER JOIN '.MAIN_DB_PREFIX.'product p ON p.rowid = d.fk_product';
+			$sql .= ' WHERE d.fk_propal = '.((int) $parentId);
+		} elseif ($elementType === 'commandedet') {
+			$sql = 'SELECT d.qty, p.volume, p.volume_units FROM '.MAIN_DB_PREFIX.'commandedet d';
+			$sql .= ' INNER JOIN '.MAIN_DB_PREFIX.'product p ON p.rowid = d.fk_product';
+			$sql .= ' WHERE d.fk_commande = '.((int) $parentId);
+		} elseif ($elementType === 'contratdet') {
+			$sql = 'SELECT d.qty, p.volume, p.volume_units FROM '.MAIN_DB_PREFIX.'contratdet d';
+			$sql .= ' INNER JOIN '.MAIN_DB_PREFIX.'product p ON p.rowid = d.fk_product';
+			$sql .= ' WHERE d.fk_contrat = '.((int) $parentId);
+		} else {
+			return 0.0;
+		}
 		$sql .= ' AND d.product_type = 0';
 		$resql = $this->db->query($sql);
 		$totalVolume = 0.0;
