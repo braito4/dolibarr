@@ -18,6 +18,7 @@ require_once $documentRoot.'/resource/class/dolresource.class.php';
 require_once $documentRoot.'/resource/class/resourcereservationmanager.class.php';
 require_once $documentRoot.'/resource/class/resourcesupplyrequestmanager.class.php';
 require_once $documentRoot.'/resource/core/triggers/interface_99_modResource_ResourceReservations.class.php';
+require_once $documentRoot.'/custom/recursos-beta-br4ito/core/triggers/interface_98_modRecursosBetaBr4ito_RecursosBetaBr4itoTriggers.class.php';
 require_once $documentRoot.'/bookcal/class/bookcalavailabilityprovider.class.php';
 
 if (empty($user->id)) {
@@ -37,6 +38,9 @@ class ResourceReservationTest extends TestCase
 
 	/** @var InterfaceResourceReservations */
 	private $trigger;
+
+	/** @var InterfaceRecursosBetaBr4itoTriggers */
+	private $unknownTrigger;
 
 	/** @var int */
 	private $serviceId;
@@ -64,6 +68,12 @@ class ResourceReservationTest extends TestCase
 			self::assertEmpty($result['errors'], implode(', ', $result['errors']));
 			$conf->setValues($db);
 		}
+		if (!isModEnabled('recursosbetabr4ito')) {
+			require_once DOL_DOCUMENT_ROOT.'/core/lib/admin.lib.php';
+			$result = activateModule('modRecursosBetaBr4ito');
+			self::assertEmpty($result['errors'], implode(', ', $result['errors']));
+			$conf->setValues($db);
+		}
 	}
 
 	/**
@@ -77,6 +87,7 @@ class ResourceReservationTest extends TestCase
 		$this->db = $db;
 		$this->db->begin();
 		$this->trigger = new InterfaceResourceReservations($this->db);
+		$this->unknownTrigger = new InterfaceRecursosBetaBr4itoTriggers($this->db);
 
 		$this->thirdPartyId = $this->insert('societe', array(
 			'nom' => 'PHPUnit Resource Reservation',
@@ -751,7 +762,7 @@ class ResourceReservationTest extends TestCase
 		$proposal = new stdClass();
 		$proposal->id = $proposalId;
 
-		$this->assertSame(1, $this->trigger->runTrigger('PROPAL_VALIDATE', $proposal, $user, $langs, $conf));
+		$this->assertSame(1, $this->runObjectTrigger('PROPAL_VALIDATE', $proposalId));
 		$assignment = $this->fetchReservation('propaldet', $lineId);
 		$this->assertSame(ResourceReservationManager::STATUS_AWAITING_SUPPLY, $assignment->reservation_status);
 		$sql = 'SELECT rowid, request_status, quantity_requested FROM '.MAIN_DB_PREFIX.'resource_supply_request';
@@ -766,7 +777,7 @@ class ResourceReservationTest extends TestCase
 			'date_start' => '2026-12-10 08:00:00',
 			'date_end' => '2026-12-11 08:00:00',
 		), $user));
-		$this->assertSame(1, $this->trigger->runTrigger('PROPAL_CLOSE_REFUSED', $proposal, $user, $langs, $conf));
+		$this->assertSame(1, $this->runObjectTrigger('PROPAL_CLOSE_REFUSED', $proposalId));
 		$sql = 'SELECT request_status FROM '.MAIN_DB_PREFIX.'resource_supply_request WHERE rowid='.((int) $request->rowid);
 		$this->assertSame(ResourceSupplyRequestManager::STATUS_RELEASED, $this->db->fetch_object($this->db->query($sql))->request_status);
 		$this->assertSame(ResourceReservationManager::STATUS_CANCELED, $this->fetchReservation('propaldet', $lineId)->reservation_status);
@@ -1284,21 +1295,21 @@ class ResourceReservationTest extends TestCase
 
 		$order = new stdClass();
 		$order->id = 8801;
-		$this->assertSame(1, $this->trigger->runTrigger('ORDER_SUPPLIER_APPROVE', $order, $user, $langs, $conf));
+		$this->assertSame(1, $this->runObjectTrigger('ORDER_SUPPLIER_APPROVE', 8801));
 		$sql = 'SELECT * FROM '.MAIN_DB_PREFIX.'resource_supply_request WHERE rowid='.((int) $requestId);
 		$request = $this->db->fetch_object($this->db->query($sql));
 		$this->assertSame(ResourceSupplyRequestManager::STATUS_REQUESTED, $request->request_status);
 		$this->assertSame('ORDER_SUPPLIER_APPROVE', $request->supplier_order_status);
 		$this->assertSame(ResourceReservationManager::STATUS_AWAITING_SUPPLY, $this->fetchReservation('propaldet', 99881)->reservation_status);
 
-		$this->assertSame(1, $this->trigger->runTrigger('ORDER_SUPPLIER_SUBMIT', $order, $user, $langs, $conf));
+		$this->assertSame(1, $this->runObjectTrigger('ORDER_SUPPLIER_SUBMIT', 8801));
 		$request = $this->fetchSupplyRequestForLine(99881);
 		$this->assertSame(ResourceSupplyRequestManager::STATUS_REQUESTED, $request->request_status);
 		$this->assertSame(ResourceReservationManager::STATUS_AWAITING_SUPPLY, $this->fetchReservation('propaldet', 99881)->reservation_status);
 
 		$sql = 'UPDATE '.MAIN_DB_PREFIX.'commande_fournisseur SET fk_statut='.CommandeFournisseur::STATUS_RECEIVED_PARTIALLY.' WHERE rowid=8801';
 		$this->assertTrue((bool) $this->db->query($sql));
-		$this->assertSame(1, $this->trigger->runTrigger('ORDER_SUPPLIER_RECEIVE', $order, $user, $langs, $conf));
+		$this->assertSame(1, $this->runObjectTrigger('ORDER_SUPPLIER_RECEIVE', 8801));
 		$request = $this->fetchSupplyRequestForLine(99881);
 		$this->assertSame(ResourceSupplyRequestManager::STATUS_CONFIRMED, $request->request_status);
 		$this->assertSame('ORDER_SUPPLIER_RECEIVE_PARTIAL', $request->supplier_order_status);
@@ -1306,11 +1317,131 @@ class ResourceReservationTest extends TestCase
 
 		$sql = 'UPDATE '.MAIN_DB_PREFIX.'commande_fournisseur SET fk_statut='.CommandeFournisseur::STATUS_RECEIVED_COMPLETELY.' WHERE rowid=8801';
 		$this->assertTrue((bool) $this->db->query($sql));
-		$this->assertSame(1, $this->trigger->runTrigger('ORDER_SUPPLIER_RECEIVE', $order, $user, $langs, $conf));
+		$this->assertSame(1, $this->runObjectTrigger('ORDER_SUPPLIER_RECEIVE', 8801));
 		$request = $this->fetchSupplyRequestForLine(99881);
 		$this->assertSame(ResourceSupplyRequestManager::STATUS_CONFIRMED, $request->request_status);
 		$this->assertSame('ORDER_SUPPLIER_RECEIVE_COMPLETE', $request->supplier_order_status);
 		$this->assertSame(ResourceReservationManager::STATUS_CONFIRMED, $this->fetchReservation('propaldet', 99881)->reservation_status);
+	}
+
+	/**
+	 * Dolibarr 22 can reach the same pre-reception states through dedicated
+	 * methods or through setStatus(). None of them confirms availability.
+	 *
+	 * @return void
+	 */
+	public function testDolibarr22PreReceptionTriggerAliasesRemainRequested(): void
+	{
+		global $user;
+		$context = $this->createValidatedUnknownProposal(1.0, '2027-06-01 15:00:00', '2027-06-02 11:00:00');
+		$request = $this->fetchSupplyRequestForLine($context['line_id']);
+		$manager = new ResourceSupplyRequestManager($this->db);
+		$this->assertSame(1, $manager->linkSupplierOrder((int) $request->rowid, 99884, 99885, $user));
+		$this->insert('commande_fournisseur', array(
+			'rowid' => 99884,
+			'ref' => 'PHPUNIT-SUPPLIER-ORDER-99884',
+			'entity' => 1,
+			'fk_soc' => $this->thirdPartyId,
+			'date_creation' => '2027-01-01 08:00:00',
+			'fk_user_author' => $user->id,
+			'fk_statut' => CommandeFournisseur::STATUS_VALIDATED,
+			'source' => 0,
+		));
+
+		$actions = array(
+			'ORDER_SUPPLIER_VALIDATE',
+			'ORDER_SUPPLIER_APPROVE',
+			'ORDER_SUPPLIER_SUBMIT',
+			'ORDER_SUPPLIER_STATUS_DRAFT',
+			'ORDER_SUPPLIER_STATUS_VALIDATED',
+			'ORDER_SUPPLIER_STATUS_APPROVED',
+			'ORDER_SUPPLIER_STATUS_ORDERED',
+		);
+		foreach ($actions as $action) {
+			$this->assertSame(1, $this->runObjectTrigger($action, 99884), $action);
+			$this->assertSame(ResourceSupplyRequestManager::STATUS_REQUESTED, $this->fetchSupplyRequestForLine($context['line_id'])->request_status, $action);
+			$this->assertSame(ResourceReservationManager::STATUS_AWAITING_SUPPLY, $this->fetchReservation('propaldet', $context['line_id'])->reservation_status, $action);
+		}
+	}
+
+	/**
+	 * Repeated partial and complete receptions are idempotent and create only
+	 * one availability slot while preserving reception completeness.
+	 *
+	 * @return void
+	 */
+	public function testDolibarr22ReceptionTriggersAreIdempotent(): void
+	{
+		global $user;
+		$context = $this->createValidatedUnknownProposal(1.0, '2027-06-03 15:00:00', '2027-06-04 11:00:00');
+		$request = $this->fetchSupplyRequestForLine($context['line_id']);
+		$manager = new ResourceSupplyRequestManager($this->db);
+		$this->assertSame(1, $manager->linkSupplierOrder((int) $request->rowid, 99886, 99887, $user));
+		$this->insert('commande_fournisseur', array(
+			'rowid' => 99886,
+			'ref' => 'PHPUNIT-SUPPLIER-ORDER-99886',
+			'entity' => 1,
+			'fk_soc' => $this->thirdPartyId,
+			'date_creation' => '2027-01-01 08:00:00',
+			'fk_user_author' => $user->id,
+			'fk_statut' => CommandeFournisseur::STATUS_RECEIVED_PARTIALLY,
+			'source' => 0,
+		));
+
+		$this->assertSame(1, $this->runObjectTrigger('ORDER_SUPPLIER_RECEIVE', 99886));
+		$this->assertSame(1, $this->runObjectTrigger('ORDER_SUPPLIER_RECEIVE', 99886));
+		$request = $this->fetchSupplyRequestForLine($context['line_id']);
+		$this->assertSame(ResourceSupplyRequestManager::STATUS_CONFIRMED, $request->request_status);
+		$this->assertSame('ORDER_SUPPLIER_RECEIVE_PARTIAL', $request->supplier_order_status);
+		$sql = 'SELECT COUNT(*) AS total FROM '.MAIN_DB_PREFIX.'resource_time_slot WHERE fk_resource='.((int) $this->firstResourceId);
+		$sql .= " AND date_start='2027-06-03 15:00:00' AND date_end='2027-06-04 11:00:00'";
+		$this->assertSame(1, (int) $this->db->fetch_object($this->db->query($sql))->total);
+
+		$sql = 'UPDATE '.MAIN_DB_PREFIX.'commande_fournisseur SET fk_statut='.CommandeFournisseur::STATUS_RECEIVED_COMPLETELY.' WHERE rowid=99886';
+		$this->assertTrue((bool) $this->db->query($sql));
+		$this->assertSame(1, $this->runObjectTrigger('ORDER_SUPPLIER_RECEIVE', 99886));
+		$this->assertSame(1, $this->runObjectTrigger('ORDER_SUPPLIER_STATUS_RECEIVED_COMPLETELY', 99886));
+		$request = $this->fetchSupplyRequestForLine($context['line_id']);
+		$this->assertSame(ResourceSupplyRequestManager::STATUS_CONFIRMED, $request->request_status);
+		$this->assertSame('ORDER_SUPPLIER_RECEIVE_COMPLETE', $request->supplier_order_status);
+		$sql = 'SELECT COUNT(*) AS total FROM '.MAIN_DB_PREFIX.'resource_time_slot WHERE fk_resource='.((int) $this->firstResourceId);
+		$sql .= " AND date_start='2027-06-03 15:00:00' AND date_end='2027-06-04 11:00:00'";
+		$this->assertSame(1, (int) $this->db->fetch_object($this->db->query($sql))->total);
+	}
+
+	/**
+	 * A canceled customer demand remains terminal when a late complete supplier
+	 * reception arrives through the Dolibarr 22 trigger.
+	 *
+	 * @return void
+	 */
+	public function testDolibarr22LateReceptionCannotReopenCanceledProposal(): void
+	{
+		global $user;
+		$context = $this->createValidatedUnknownProposal(1.0, '2027-06-05 15:00:00', '2027-06-06 11:00:00');
+		$request = $this->fetchSupplyRequestForLine($context['line_id']);
+		$manager = new ResourceSupplyRequestManager($this->db);
+		$this->assertSame(1, $manager->linkSupplierOrder((int) $request->rowid, 99888, 99889, $user));
+		$this->insert('commande_fournisseur', array(
+			'rowid' => 99888,
+			'ref' => 'PHPUNIT-SUPPLIER-ORDER-99888',
+			'entity' => 1,
+			'fk_soc' => $this->thirdPartyId,
+			'date_creation' => '2027-01-01 08:00:00',
+			'fk_user_author' => $user->id,
+			'fk_statut' => CommandeFournisseur::STATUS_ORDERSENT,
+			'source' => 0,
+		));
+		$sql = 'UPDATE '.MAIN_DB_PREFIX.'propal SET fk_statut=-1 WHERE rowid='.((int) $context['proposal_id']);
+		$this->assertTrue((bool) $this->db->query($sql));
+		$this->assertSame(1, $this->runObjectTrigger('PROPAL_CANCEL', $context['proposal_id']));
+		$this->assertSame(ResourceSupplyRequestManager::STATUS_CANCELED, $this->fetchSupplyRequestForLine($context['line_id'])->request_status);
+
+		$sql = 'UPDATE '.MAIN_DB_PREFIX.'commande_fournisseur SET fk_statut='.CommandeFournisseur::STATUS_RECEIVED_COMPLETELY.' WHERE rowid=99888';
+		$this->assertTrue((bool) $this->db->query($sql));
+		$this->assertSame(1, $this->runObjectTrigger('ORDER_SUPPLIER_RECEIVE', 99888));
+		$this->assertSame(ResourceSupplyRequestManager::STATUS_CANCELED, $this->fetchSupplyRequestForLine($context['line_id'])->request_status);
+		$this->assertSame(ResourceReservationManager::STATUS_CANCELED, $this->fetchReservation('propaldet', $context['line_id'])->reservation_status);
 	}
 
 	/**
@@ -1504,7 +1635,9 @@ class ResourceReservationTest extends TestCase
 		$object = new stdClass();
 		$object->id = $lineId;
 		$object->context = array();
-		return $this->trigger->runTrigger($action, $object, $user, $langs, $conf);
+		$unknownResult = $this->unknownTrigger->runTrigger($action, $object, $user, $langs, $conf);
+		$coreResult = $this->trigger->runTrigger($action, $object, $user, $langs, $conf);
+		return min($unknownResult, $coreResult) < 0 ? min($unknownResult, $coreResult) : max($unknownResult, $coreResult);
 	}
 
 	/**
@@ -1517,7 +1650,9 @@ class ResourceReservationTest extends TestCase
 		global $user, $langs, $conf;
 		$object = new stdClass();
 		$object->id = $objectId;
-		return $this->trigger->runTrigger($action, $object, $user, $langs, $conf);
+		$unknownResult = $this->unknownTrigger->runTrigger($action, $object, $user, $langs, $conf);
+		$coreResult = $this->trigger->runTrigger($action, $object, $user, $langs, $conf);
+		return min($unknownResult, $coreResult) < 0 ? min($unknownResult, $coreResult) : max($unknownResult, $coreResult);
 	}
 
 	/**
