@@ -46,6 +46,7 @@ ResourceStatusOutOfService=Fuera de servicio
 ResourceMetricValue=Valor específico del recurso
 ResourceCooldownMinutes=Enfriamiento (minutos)
 ResourceCapacityMode=Modelo de capacidad
+ResourceCapacityModeVolume=Volumen
 ResourceMetricLabel=Etiqueta de la métrica
 ResourceMetricUnit=Unidad de la métrica
 ResourceSupportsCooldown=Admite enfriamiento

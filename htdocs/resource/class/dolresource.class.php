@@ -189,7 +189,7 @@ class Dolresource extends CommonObject
 			$this->max_users = null;
 			$this->allow_overflow = 0;
 		}
-		if ($this->capacity_mode !== 'custom') {
+		if ($this->capacity_mode !== 'custom' && $this->capacity_mode !== 'volume') {
 			$this->metric_value = null;
 		}
 		if (!$this->supports_cooldown) {

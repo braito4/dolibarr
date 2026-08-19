@@ -46,6 +46,7 @@ ResourceStatusOutOfService=Out of service
 ResourceMetricValue=Resource-specific value
 ResourceCooldownMinutes=Cooldown (minutes)
 ResourceCapacityMode=Capacity model
+ResourceCapacityModeVolume=Volume
 ResourceMetricLabel=Metric label
 ResourceMetricUnit=Metric unit
 ResourceSupportsCooldown=Supports cooldown

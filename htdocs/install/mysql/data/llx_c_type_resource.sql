@@ -31,5 +31,5 @@
 --
 
 insert into llx_c_type_resource (code, label, capacity_mode, metric_label, metric_unit, supports_cooldown, active) values ('RES_ROOMS', 'Rooms', 'users', NULL, NULL, 0, 1);
-insert into llx_c_type_resource (code, label, capacity_mode, metric_label, metric_unit, supports_cooldown, active) values ('RES_CARS', 'Cars', 'custom', 'Usage value', NULL, 0, 1);
+insert into llx_c_type_resource (code, label, capacity_mode, metric_label, metric_unit, supports_cooldown, active) values ('RES_CARS', 'Cars', 'volume', 'Load volume', 'm3', 0, 1);
 insert into llx_c_type_resource (code, label, capacity_mode, metric_label, metric_unit, supports_cooldown, active) values ('RES_MACHINES', 'Machinery', 'none', NULL, NULL, 1, 1);
