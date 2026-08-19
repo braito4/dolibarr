@@ -37,8 +37,9 @@ class BookCalAvailabilityProvider
 	{
 		$slots = array();
 		$dayParts = dol_getdate($dayStart);
-		$localDayStart = dol_mktime(0, 0, 0, $dayParts['mon'], $dayParts['mday'], $dayParts['year'], 'tzuserrel');
 		$dayKey = sprintf('%04d-%02d-%02d', $dayParts['year'], $dayParts['mon'], $dayParts['mday']);
+		$timezone = new DateTimeZone($this->getTimezone($calendarId));
+		$localDayStart = (new DateTimeImmutable($dayKey.' 00:00:00', $timezone))->getTimestamp();
 		$sql = 'SELECT ba.duration, ba.startHour, ba.endHour, ba.start, ba.end';
 		$sql .= ' FROM '.MAIN_DB_PREFIX.'bookcal_availabilities ba';
 		$sql .= ' INNER JOIN '.MAIN_DB_PREFIX.'bookcal_calendar bc ON bc.rowid = ba.fk_bookcal_calendar';
@@ -59,7 +60,7 @@ class BookCalAvailabilityProvider
 			}
 			$duration = (int) $range->duration;
 			while ($cursor + ($duration * 60) <= $limit) {
-				$key = dol_print_date($cursor, '%H:%M', 'tzuserrel');
+				$key = (new DateTimeImmutable('@'.$cursor))->setTimezone($timezone)->format('H:i');
 				$available = $this->isAvailable($calendarId, $cursor, $cursor + ($duration * 60));
 				$slots[$key] = $available ? $duration : -$duration;
 				$cursor += $duration * 60;
@@ -88,9 +89,10 @@ class BookCalAvailabilityProvider
 		$sql .= ' INNER JOIN '.MAIN_DB_PREFIX.'bookcal_calendar bc ON bc.rowid = ba.fk_bookcal_calendar';
 		$sql .= ' WHERE ba.fk_bookcal_calendar = '.((int) $calendarId).' AND ba.status = 1 AND bc.status = 1';
 		$resql = $this->db->query($sql);
-		$dateParts = dol_getdate($dateStart);
-		$dayStart = dol_mktime(0, 0, 0, $dateParts['mon'], $dateParts['mday'], $dateParts['year'], 'tzuserrel');
-		$dayKey = sprintf('%04d-%02d-%02d', $dateParts['year'], $dateParts['mon'], $dateParts['mday']);
+		$timezone = new DateTimeZone($this->getTimezone($calendarId));
+		$localDate = (new DateTimeImmutable('@'.$dateStart))->setTimezone($timezone);
+		$dayKey = $localDate->format('Y-m-d');
+		$dayStart = (new DateTimeImmutable($dayKey.' 00:00:00', $timezone))->getTimestamp();
 		while ($resql && ($range = $this->db->fetch_object($resql))) {
 			$rangeStart = substr((string) $range->start, 0, 10);
 			$rangeEnd = substr((string) $range->end, 0, 10);
@@ -122,5 +124,58 @@ class BookCalAvailabilityProvider
 		$sql .= " AND datep < '".$this->db->idate($dateEnd)."'";
 		$obj = $this->db->fetch_object($this->db->query($sql));
 		return !$obj || (int) $obj->nb === 0;
+	}
+
+	/**
+	 * Convert a calendar-local day and clock time to an absolute timestamp.
+	 *
+	 * @param int    $calendarId Calendar id
+	 * @param int    $dayStart   Selected day timestamp used only for its date
+	 * @param string $clockTime  Local time formatted as HH:MM
+	 * @return int
+	 */
+	public function getLocalTimestamp($calendarId, $dayStart, $clockTime)
+	{
+		$dayParts = dol_getdate($dayStart);
+		$dayKey = sprintf('%04d-%02d-%02d', $dayParts['year'], $dayParts['mon'], $dayParts['mday']);
+		$timezone = new DateTimeZone($this->getTimezone($calendarId));
+		$date = DateTimeImmutable::createFromFormat('!Y-m-d H:i', $dayKey.' '.$clockTime, $timezone);
+		if (!($date instanceof DateTimeImmutable) || $date->format('H:i') !== $clockTime) {
+			return 0;
+		}
+		return $date->getTimestamp();
+	}
+
+	/**
+	 * Format an absolute timestamp in the resource timezone.
+	 *
+	 * @param int    $calendarId Calendar id
+	 * @param int    $timestamp  Absolute timestamp
+	 * @param string $format     DateTime format
+	 * @return string
+	 */
+	public function formatLocalTimestamp($calendarId, $timestamp, $format = 'Y-m-d H:i')
+	{
+		$timezone = new DateTimeZone($this->getTimezone($calendarId));
+		return (new DateTimeImmutable('@'.$timestamp))->setTimezone($timezone)->format($format);
+	}
+
+	/**
+	 * Return the IANA timezone configured on the booked resource.
+	 *
+	 * @param int $calendarId Calendar id
+	 * @return string
+	 */
+	public function getTimezone($calendarId)
+	{
+		$sql = 'SELECT timezone FROM '.MAIN_DB_PREFIX.'bookcal_calendar WHERE rowid = '.((int) $calendarId);
+		$obj = $this->db->fetch_object($this->db->query($sql));
+		$timezone = $obj && !empty($obj->timezone) ? (string) $obj->timezone : 'UTC';
+		try {
+			new DateTimeZone($timezone);
+		} catch (Exception $exception) {
+			$timezone = 'UTC';
+		}
+		return $timezone;
 	}
 }

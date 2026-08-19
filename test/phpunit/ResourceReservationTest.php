@@ -624,7 +624,7 @@ class ResourceReservationTest extends TestCase
 	}
 
 	/**
-	 * BookCal slot labels remain aligned with configured local opening hours.
+	 * BookCal slots use the resource timezone instead of the visitor timezone.
 	 *
 	 * @return void
 	 */
@@ -635,6 +635,7 @@ class ResourceReservationTest extends TestCase
 			'entity' => 1,
 			'ref' => 'PHPUNIT-BOOKCAL',
 			'label' => 'PHPUnit BookCal',
+			'timezone' => 'Europe/Madrid',
 			'date_creation' => '2026-08-19 10:00:00',
 			'fk_user_creat' => $user->id,
 			'status' => 1,
@@ -654,8 +655,11 @@ class ResourceReservationTest extends TestCase
 			'fk_bookcal_calendar' => $calendarId,
 		));
 		$previousTimezone = isset($_SESSION['dol_tz_string']) ? $_SESSION['dol_tz_string'] : null;
-		$_SESSION['dol_tz_string'] = 'Europe/Madrid';
-		$slots = (new BookCalAvailabilityProvider($this->db))->getSlots($calendarId, gmmktime(0, 0, 0, 8, 20, 2026));
+		$_SESSION['dol_tz_string'] = 'America/New_York';
+		$provider = new BookCalAvailabilityProvider($this->db);
+		$dayStart = gmmktime(0, 0, 0, 8, 20, 2026);
+		$slots = $provider->getSlots($calendarId, $dayStart);
+		$slotStart = $provider->getLocalTimestamp($calendarId, $dayStart, '09:00');
 		if ($previousTimezone === null) {
 			unset($_SESSION['dol_tz_string']);
 		} else {
@@ -664,6 +668,8 @@ class ResourceReservationTest extends TestCase
 
 		$this->assertSame(array('09:00', '10:00'), array_keys($slots));
 		$this->assertSame(array(60, 60), array_values($slots));
+		$this->assertSame('2026-08-20 07:00:00', gmdate('Y-m-d H:i:s', $slotStart));
+		$this->assertSame('2026-08-20 09:00', $provider->formatLocalTimestamp($calendarId, $slotStart));
 	}
 
 	/**
@@ -678,6 +684,7 @@ class ResourceReservationTest extends TestCase
 			'entity' => 1,
 			'ref' => 'PHPUNIT-BOOKCAL-OVERNIGHT',
 			'label' => 'PHPUnit overnight BookCal',
+			'timezone' => 'Europe/Madrid',
 			'date_creation' => '2026-08-19 10:00:00',
 			'fk_user_creat' => $user->id,
 			'status' => 1,
@@ -699,7 +706,7 @@ class ResourceReservationTest extends TestCase
 		$dayStart = gmmktime(0, 0, 0, 8, 20, 2026);
 		$provider = new BookCalAvailabilityProvider($this->db);
 		$slots = $provider->getSlots($calendarId, $dayStart);
-		$slotStart = dol_mktime(12, 0, 0, 8, 20, 2026, 'tzuserrel');
+		$slotStart = $provider->getLocalTimestamp($calendarId, $dayStart, '12:00');
 
 		$this->assertSame(array('12:00' => 1439), $slots);
 		$this->assertTrue($provider->isAvailable($calendarId, $slotStart, $slotStart + (1439 * 60)));

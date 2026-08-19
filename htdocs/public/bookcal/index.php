@@ -332,7 +332,8 @@ if ($action == 'afteradd') {
 	print '<h2>';
 	print $langs->trans("BookingSuccessfullyBooked");
 	print '</h2>';
-	print $langs->trans("BookingReservationHourAfter", dol_print_date(GETPOSTINT("datetimebooking"), "dayhourtext"));
+	$availabilityProvider = new BookCalAvailabilityProvider($db);
+	print $langs->trans("BookingReservationHourAfter", $availabilityProvider->formatLocalTimestamp($id, GETPOSTINT('datetimebooking')));
 } else {
 	$param = '';
 
@@ -371,10 +372,11 @@ if ($action == 'afteradd') {
 			$timebookingarray = explode(" - ", $timebooking);
 			$timestartarray = explode(":", $timebookingarray[0]);
 			$timeendarray = explode(":", $timebookingarray[1]);
-			$datetimebooking = dol_time_plus_duree($datetimechosen, intval($timestartarray[0]), "h");
-			$datetimebooking = dol_time_plus_duree($datetimebooking, intval($timestartarray[1]), "i");
+			$availabilityProvider = new BookCalAvailabilityProvider($db);
+			$datetimebooking = $availabilityProvider->getLocalTimestamp($id, $datetimechosen, sprintf('%02d:%02d', (int) $timestartarray[0], (int) $timestartarray[1]));
 		}
-		print '<span>'.img_picto("", "calendar")." ".dol_print_date($datetimebooking, 'dayhourtext').'</span>';
+		$availabilityProvider = new BookCalAvailabilityProvider($db);
+		print '<span>'.img_picto("", "calendar").' '.$availabilityProvider->formatLocalTimestamp($id, $datetimebooking).'</span>';
 		print '<div class="center"><a href="'.$_SERVER["PHP_SELF"].'?id=1&year=2024&month=2" class="small">('.$langs->trans("SelectANewDate").')</a></div>';
 		print '</td>';
 
