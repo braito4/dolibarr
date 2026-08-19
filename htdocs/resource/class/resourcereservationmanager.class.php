@@ -449,7 +449,7 @@ class ResourceReservationManager extends ResourceRequirementManager
 		$sql .= ((int) $assignment['element_id']).", '".$this->db->escape($assignment['element_type'])."', ".((int) $resourceId).", '".$this->db->escape($resourceType)."', 1, ";
 		$sql .= (!empty($assignment['mandatory']) ? 1 : 0).', '.((int) (!empty($assignment['position']) ? $assignment['position'] : 0));
 		$sql .= ", 'assignment', '".$this->db->escape(!empty($assignment['resource_role']) ? $assignment['resource_role'] : 'capacity')."', ";
-		$sql .= price2num(isset($assignment['service_quantity']) ? $assignment['service_quantity'] : 1, 'MS').', '.price2num($capacity, 'MS').', '.$resourceUnits.', ';
+		$sql .= price2num(isset($assignment['service_quantity']) ? $assignment['service_quantity'] : 1, 'MS').', '.price2num($capacity, 'MS').', '.((int) $resourceUnits).', ';
 		$sql .= "'".$this->db->escape($assignment['date_start'])."', '".$this->db->escape($assignment['date_end'])."', '";
 		$sql .= $this->db->escape(!empty($assignment['reservation_status']) ? $assignment['reservation_status'] : self::STATUS_CONFIRMED)."', ".((int) $user->id).')';
 		if (!$this->db->query($sql)) {
@@ -608,7 +608,7 @@ class ResourceReservationManager extends ResourceRequirementManager
 		$sql .= " INNER JOIN ".MAIN_DB_PREFIX."propaldet pd ON pd.rowid=er.element_id AND er.element_type='propaldet'";
 		$sql .= ' INNER JOIN '.MAIN_DB_PREFIX.'propal p ON p.rowid=pd.fk_propal';
 		$sql .= ' LEFT JOIN '.MAIN_DB_PREFIX.'product prod ON prod.rowid=pd.fk_product';
-		$sql .= $supplierJoin;
+		$sql .= $supplierJoin; // Fragment only contains fixed table names and an entity filter. @phan-suppress-current-line SqlInjection
 		$sql .= ' WHERE er.resource_id='.((int) $resourceId)." AND er.reservation_status NOT IN ('canceled','unavailable')";
 		$sql .= " AND (er.date_end IS NULL OR er.date_end >= '".$this->db->idate(dol_now())."')";
 		$sql .= ' UNION ALL ';
@@ -618,7 +618,7 @@ class ResourceReservationManager extends ResourceRequirementManager
 		$sql .= " INNER JOIN ".MAIN_DB_PREFIX."contratdet cd ON cd.rowid=er.element_id AND er.element_type='contratdet'";
 		$sql .= ' INNER JOIN '.MAIN_DB_PREFIX.'contrat c ON c.rowid=cd.fk_contrat';
 		$sql .= ' LEFT JOIN '.MAIN_DB_PREFIX.'product prod ON prod.rowid=cd.fk_product';
-		$sql .= $supplierJoin;
+		$sql .= $supplierJoin; // Fragment only contains fixed table names and an entity filter. @phan-suppress-current-line SqlInjection
 		$sql .= ' WHERE er.resource_id='.((int) $resourceId)." AND er.reservation_status='confirmed'";
 		$sql .= " AND (er.date_end IS NULL OR er.date_end >= '".$this->db->idate(dol_now())."')";
 		$sql .= ' ORDER BY date_start, rowid';
@@ -685,6 +685,8 @@ class ResourceReservationManager extends ResourceRequirementManager
 	private function formatLongTranslation(Translate $langs, $key, array $parameters)
 	{
 		$format = !empty($langs->tab_translate[$key]) ? $langs->tab_translate[$key] : $key;
+		// Translation formats are loaded dynamically from trusted language files.
+		// @phan-suppress-next-line PhanPluginPrintfVariableFormatString
 		return vsprintf($format, $parameters);
 	}
 
