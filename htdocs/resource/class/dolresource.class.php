@@ -35,6 +35,11 @@ class Dolresource extends CommonObject
 {
 	use CommonPeople;
 
+	public const STATUS_UNKNOWN = 0;
+	public const STATUS_FREE = 1;
+	public const STATUS_OUT_OF_SERVICE = 2;
+	public const STATUS_OCCUPIED = 3;
+
 	/**
 	 * @var string ID to identify managed object
 	 */
@@ -64,6 +69,27 @@ class Dolresource extends CommonObject
 	 * @var ?int		Maximum users
 	 */
 	public $max_users;
+
+	/**
+	 * @var int<0,1> Allow capacity exceeding a resource to spill over to the next preferred resource
+	 */
+	public $allow_overflow = 0;
+	/** @var ?float Type-specific metric value */
+	public $metric_value;
+	/** @var ?float Maximum payload weight in kilograms for volume resources */
+	public $max_payload_weight;
+	/** @var ?string Operational location used for resource matching */
+	public $operational_location;
+	/** @var int Cooldown blocking time after use, in minutes */
+	public $cooldown_minutes = 0;
+	/** @var string Resource type capacity model */
+	public $capacity_mode = 'none';
+	/** @var ?string */
+	public $metric_label;
+	/** @var ?string */
+	public $metric_unit;
+	/** @var int<0,1> */
+	public $supports_cooldown = 0;
 
 	/**
 	 * @var string ID
@@ -140,9 +166,44 @@ class Dolresource extends CommonObject
 	public function __construct(DoliDB $db)
 	{
 		$this->db = $db;
-		$this->status = 0;
+		$this->status = self::STATUS_FREE;
 
 		$this->cache_code_type_resource = array();
+	}
+
+	/**
+	 * Apply the capabilities declared by the selected resource type.
+	 *
+	 * Unsupported values are cleared here so every entry point (UI, API or
+	 * import) follows the same rules.
+	 *
+	 * @return void
+	 */
+	public function applyTypeCapabilities()
+	{
+		$sql = 'SELECT capacity_mode, metric_label, metric_unit, supports_cooldown';
+		$sql .= ' FROM '.$this->db->prefix().'c_type_resource';
+		$sql .= " WHERE code = '".$this->db->escape((string) $this->fk_code_type_resource)."'";
+		$model = $this->db->fetch_object($this->db->query($sql));
+		$this->capacity_mode = $model ? ($model->capacity_mode ?: 'none') : 'none';
+		$this->metric_label = $model ? $model->metric_label : null;
+		$this->metric_unit = $model ? $model->metric_unit : null;
+		$this->supports_cooldown = $model ? (int) $model->supports_cooldown : 0;
+		if ($this->capacity_mode !== 'users') {
+			$this->max_users = null;
+		}
+		if ($this->capacity_mode !== 'users' && $this->capacity_mode !== 'volume') {
+			$this->allow_overflow = 0;
+		}
+		if ($this->capacity_mode !== 'custom' && $this->capacity_mode !== 'volume') {
+			$this->metric_value = null;
+		}
+		if ($this->capacity_mode !== 'volume') {
+			$this->max_payload_weight = null;
+		}
+		if (!$this->supports_cooldown) {
+			$this->cooldown_minutes = 0;
+		}
 	}
 
 	/**
@@ -158,6 +219,7 @@ class Dolresource extends CommonObject
 
 		$error = 0;
 		$this->date_creation = dol_now();
+		$this->applyTypeCapabilities();
 
 		// Clean parameters
 		$new_resource_values = [
@@ -171,6 +233,11 @@ class Dolresource extends CommonObject
 			$this->phone,
 			$this->email,
 			$this->max_users,
+			$this->allow_overflow,
+			$this->metric_value,
+			$this->max_payload_weight,
+			$this->operational_location,
+			$this->cooldown_minutes,
 			$this->url,
 			$this->fk_code_type_resource,
 			$this->note_public,
@@ -195,17 +262,35 @@ class Dolresource extends CommonObject
 		$sql .= "phone,";
 		$sql .= "email,";
 		$sql .= "max_users,";
+		$sql .= "allow_overflow,";
+		$sql .= "metric_value,";
+		$sql .= "max_payload_weight,";
+		$sql .= "operational_location,";
+		$sql .= "cooldown_minutes,";
 		$sql .= "url,";
 		$sql .= "fk_code_type_resource,";
 		$sql .= "note_public,";
-		$sql .= "note_private, ";
+		$sql .= "note_private,";
+		$sql .= "fk_statut, ";
 		$sql .= "datec, ";
 		$sql .= "fk_user_author ";
 		$sql .= ") VALUES (";
 		$sql .= (int) (empty($this->entity) ? ((int) $conf->entity) : ((int) $this->entity)) . ", ";
-		foreach ($new_resource_values as $value) {
-			$sql .= " " . (!empty($value) ? "'" . $this->db->escape($value) . "'" : 'NULL') . ",";
+		foreach ($new_resource_values as $key => $value) {
+			// allow_overflow is NOT NULL and zero is a meaningful value.
+			if ($key === 10) {
+				$sql .= ' '.(!empty($value) ? 1 : 0).',';
+			} elseif ($key === 11) {
+				$sql .= ' '.(isset($value) && $value !== '' ? price2num($value, 'MS') : 'NULL').',';
+			} elseif ($key === 12) {
+				$sql .= ' '.(isset($value) && $value !== '' ? price2num($value, 'MS') : 'NULL').',';
+			} elseif ($key === 14) {
+				$sql .= ' '.max(0, (int) $value).',';
+			} else {
+				$sql .= " " . (!empty($value) ? "'" . $this->db->escape($value) . "'" : 'NULL') . ",";
+			}
 		}
+		$sql .= " ".((int) $this->status).",";
 		$sql .= " '" . $this->db->idate($this->date_creation) . "',";
 		$sql .= " " . (!empty($user->id) ? ((int) $user->id) : "null");
 		$sql .= ")";
@@ -249,7 +334,7 @@ class Dolresource extends CommonObject
 				$this->error .= ($this->error ? ', '.$errmsg : $errmsg);
 			}
 			$this->db->rollback();
-			return $error;
+			return -abs((int) $error);
 		} else {
 			$this->db->commit();
 			return $this->id;
@@ -278,13 +363,20 @@ class Dolresource extends CommonObject
 		$sql .= " t.phone,";
 		$sql .= " t.email,";
 		$sql .= " t.max_users,";
+		$sql .= " t.allow_overflow,";
+		$sql .= " t.metric_value,";
+		$sql .= " t.max_payload_weight,";
+		$sql .= " t.operational_location,";
+		$sql .= " t.cooldown_minutes,";
 		$sql .= " t.url,";
 		$sql .= " t.fk_code_type_resource,";
+		$sql .= " t.fk_statut,";
 		$sql .= " t.note_public,";
 		$sql .= " t.note_private,";
 		$sql .= " t.tms as date_modification,";
 		$sql .= " t.datec as date_creation,";
-		$sql .= " ty.label as type_label";
+		$sql .= " ty.label as type_label,";
+		$sql .= " ty.capacity_mode, ty.metric_label, ty.metric_unit, ty.supports_cooldown";
 		$sql .= " FROM ".MAIN_DB_PREFIX.$this->table_element." as t";
 		$sql .= " LEFT JOIN ".MAIN_DB_PREFIX."c_type_resource as ty ON ty.code=t.fk_code_type_resource";
 		if ($id) {
@@ -311,13 +403,23 @@ class Dolresource extends CommonObject
 				$this->phone = $obj->phone;
 				$this->email = $obj->email;
 				$this->max_users = $obj->max_users;
+				$this->allow_overflow = (int) $obj->allow_overflow;
+				$this->metric_value = isset($obj->metric_value) ? (float) $obj->metric_value : null;
+				$this->max_payload_weight = isset($obj->max_payload_weight) ? (float) $obj->max_payload_weight : null;
+				$this->operational_location = $obj->operational_location;
+				$this->cooldown_minutes = (int) $obj->cooldown_minutes;
 				$this->url = $obj->url;
 				$this->fk_code_type_resource = $obj->fk_code_type_resource;
+				$this->status = (int) $obj->fk_statut;
 				$this->note_public = $obj->note_public;
 				$this->note_private = $obj->note_private;
 				$this->date_creation     = $this->db->jdate($obj->date_creation);
 				$this->date_modification = $this->db->jdate($obj->date_modification);
 				$this->type_label = $obj->type_label;
+				$this->capacity_mode = $obj->capacity_mode ?: 'none';
+				$this->metric_label = $obj->metric_label;
+				$this->metric_unit = $obj->metric_unit;
+				$this->supports_cooldown = (int) $obj->supports_cooldown;
 
 				// Retrieve all extrafield
 				// fetch optionals attributes and labels
@@ -346,6 +448,7 @@ class Dolresource extends CommonObject
 		global $conf, $langs;
 		$error = 0;
 		$this->date_modification = dol_now();
+		$this->applyTypeCapabilities();
 
 		// Clean parameters
 		if (isset($this->ref)) {
@@ -374,6 +477,9 @@ class Dolresource extends CommonObject
 		}
 		if (isset($this->email)) {
 			$this->email = trim($this->email);
+		}
+		if (isset($this->operational_location)) {
+			$this->operational_location = trim($this->operational_location);
 		}
 		if (isset($this->url)) {
 			$this->url = trim($this->url);
@@ -405,8 +511,14 @@ class Dolresource extends CommonObject
 		$sql .= " phone=".(isset($this->phone) ? "'".$this->db->escape($this->phone)."'" : "null").",";
 		$sql .= " email=".(isset($this->email) ? "'".$this->db->escape($this->email)."'" : "null").",";
 		$sql .= " max_users=".(isset($this->max_users) ? (int) $this->max_users : "null").",";
+		$sql .= " allow_overflow=".(!empty($this->allow_overflow) ? 1 : 0).",";
+		$sql .= " metric_value=".(isset($this->metric_value) ? price2num($this->metric_value, 'MS') : "null").",";
+		$sql .= " max_payload_weight=".(isset($this->max_payload_weight) ? price2num($this->max_payload_weight, 'MS') : "null").",";
+		$sql .= " operational_location=".(isset($this->operational_location) ? "'".$this->db->escape($this->operational_location)."'" : "null").",";
+		$sql .= " cooldown_minutes=".max(0, (int) $this->cooldown_minutes).",";
 		$sql .= " url=".(isset($this->url) ? "'".$this->db->escape($this->url)."'" : "null").",";
 		$sql .= " fk_code_type_resource=".(isset($this->fk_code_type_resource) ? "'".$this->db->escape($this->fk_code_type_resource)."'" : "null").",";
+		$sql .= " fk_statut=".((int) $this->status).",";
 		$sql .= " note_public=".(isset($this->note_public) ? "'".$this->db->escape($this->note_public)."'" : "null").",";
 		$sql .= " note_private=".(isset($this->note_private) ? "'".$this->db->escape($this->note_private)."'" : "null").",";
 		$sql .= " tms=" . ("'" . $this->db->idate($this->date_modification) . "',");
@@ -1022,7 +1134,37 @@ class Dolresource extends CommonObject
 	 */
 	public static function getLibStatusLabel(int $status, int $mode = 0)
 	{
-		return '';
+		global $langs;
+		$langs->load('resource');
+		$labels = self::getStatusArray();
+		$labels[self::STATUS_OCCUPIED] = $langs->trans('ResourceStatusOccupied');
+		$label = $labels[$status] ?? $labels[self::STATUS_UNKNOWN];
+		$statusType = 'status1';
+		if ($status === self::STATUS_FREE) {
+			$statusType = 'status4';
+		} elseif ($status === self::STATUS_OCCUPIED) {
+			$statusType = 'status3';
+		} elseif ($status === self::STATUS_OUT_OF_SERVICE) {
+			$statusType = 'status8';
+		}
+		return dolGetStatus($label, $label, '', $statusType, $mode);
+	}
+
+	/**
+	 * Return available manual resource statuses.
+	 * Busy is deliberately excluded because it is calculated for a time range.
+	 *
+	 * @return array<int,string>
+	 */
+	public static function getStatusArray()
+	{
+		global $langs;
+		$langs->load('resource');
+		return array(
+			self::STATUS_UNKNOWN => $langs->trans('ResourceStatusUnknown'),
+			self::STATUS_FREE => $langs->trans('ResourceStatusFree'),
+			self::STATUS_OUT_OF_SERVICE => $langs->trans('ResourceStatusOutOfService'),
+		);
 	}
 
 	/**

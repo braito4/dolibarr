@@ -83,4 +83,20 @@ UPDATE llx_supplier_proposaldet SET subprice_ttc = 0 WHERE subprice_ttc <> 0 AND
 -- VMYSQL4.1 ALTER TABLE llx_socpeople ADD COLUMN use_thirdparty_address smallint DEFAULT NULL AFTER fk_soc;
 -- VPGSQL8.2 ALTER TABLE llx_socpeople ADD COLUMN use_thirdparty_address smallint DEFAULT NULL;
 
+-- Resource characteristics and type capabilities
+ALTER TABLE llx_resource ADD COLUMN allow_overflow smallint NOT NULL DEFAULT 0;
+-- VMYSQL4.1 ALTER TABLE llx_resource MODIFY COLUMN fk_statut smallint NOT NULL DEFAULT 1;
+-- VPGSQL8.2 ALTER TABLE llx_resource ALTER COLUMN fk_statut SET DEFAULT 1;
+ALTER TABLE llx_c_type_resource ADD COLUMN capacity_mode varchar(16) NOT NULL DEFAULT 'none';
+ALTER TABLE llx_c_type_resource ADD COLUMN metric_label varchar(128) DEFAULT NULL;
+ALTER TABLE llx_c_type_resource ADD COLUMN metric_unit varchar(32) DEFAULT NULL;
+ALTER TABLE llx_c_type_resource ADD COLUMN supports_cooldown smallint NOT NULL DEFAULT 0;
+ALTER TABLE llx_resource ADD COLUMN metric_value real DEFAULT NULL;
+ALTER TABLE llx_resource ADD COLUMN max_payload_weight real DEFAULT NULL;
+ALTER TABLE llx_resource ADD COLUMN operational_location varchar(255) DEFAULT NULL;
+ALTER TABLE llx_resource ADD COLUMN cooldown_minutes integer NOT NULL DEFAULT 0;
+UPDATE llx_c_type_resource SET capacity_mode = 'users' WHERE code = 'RES_ROOMS';
+UPDATE llx_c_type_resource SET capacity_mode = 'volume', metric_label = 'Load volume', metric_unit = 'm3' WHERE code = 'RES_CARS';
+INSERT INTO llx_c_type_resource (code, label, capacity_mode, supports_cooldown, active) SELECT 'RES_MACHINES', 'Machinery', 'none', 1, 1 WHERE NOT EXISTS (SELECT 1 FROM llx_c_type_resource WHERE code = 'RES_MACHINES');
+
 -- end of migration
