@@ -482,7 +482,7 @@ if ($action == 'create' || $object->fetch($id, $ref) > 0) {
 		}
 
 		if ($object->metric_value !== null) {
-			print '<tr><td>'.dol_escape_htmltag($object->metric_label ?: $langs->trans('ResourceMetricValue')).'</td><td>'.price($object->metric_value).' '.dol_escape_htmltag($object->metric_unit).'</td></tr>';
+			print '<tr><td>'.dol_escape_htmltag($object->metric_label ?: $langs->trans('ResourceMetricValue')).'</td><td>'.price($object->metric_value).' '.dol_escape_htmltag($object->metric_unit ?: '').'</td></tr>';
 		}
 		if ($object->cooldown_minutes > 0) {
 			print '<tr><td>'.$langs->trans('ResourceCooldownMinutes').'</td><td>'.((int) $object->cooldown_minutes).' '.$langs->trans('Minutes').'</td></tr>';
