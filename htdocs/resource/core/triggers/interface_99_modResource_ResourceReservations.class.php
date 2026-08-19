@@ -45,6 +45,10 @@ class InterfaceResourceReservations extends DolibarrTriggers
 			return 0;
 		}
 
+		if ($action === 'CONTRACT_VALIDATE') {
+			return $this->synchronizeContractReservations((int) $object->id, $user, $langs);
+		}
+
 		$isProposal = strpos($action, 'LINEPROPAL_') === 0;
 		$isOrder = strpos($action, 'LINEORDER_') === 0;
 		$isContract = strpos($action, 'LINECONTRACT_') === 0;
@@ -78,6 +82,32 @@ class InterfaceResourceReservations extends DolibarrTriggers
 	}
 
 	/**
+	 * Recheck and confirm every resource assignment when a contract is validated.
+	 *
+	 * @param int $contractId Contract id
+	 * @param User $user Current user
+	 * @param Translate $langs Translation handler
+	 * @return int<-1,1>
+	 */
+	private function synchronizeContractReservations($contractId, User $user, Translate $langs)
+	{
+		$sql = 'SELECT rowid FROM '.MAIN_DB_PREFIX.'contratdet WHERE fk_contrat = '.((int) $contractId).' ORDER BY rang, rowid';
+		$resql = $this->db->query($sql);
+		if (!$resql) {
+			$this->errors[] = $this->db->lasterror();
+			return -1;
+		}
+		while ($row = $this->db->fetch_object($resql)) {
+			$line = $this->fetchLine('contratdet', (int) $row->rowid);
+			if ($line && !empty($line->fk_product) && (int) $line->product_type === 1
+				&& $this->synchronizeLineReservation('contratdet', $line, $user, $langs, true) < 0) {
+				return -1;
+			}
+		}
+		return 1;
+	}
+
+	/**
 	 * Fetch normalized service line data.
 	 *
 	 * @param string $elementType propaldet, commandedet or contratdet
@@ -96,9 +126,10 @@ class InterfaceResourceReservations extends DolibarrTriggers
 			$sql .= ' LEFT JOIN '.MAIN_DB_PREFIX.'product p ON p.rowid = d.fk_product';
 		} else {
 			$sql = 'SELECT d.rowid, d.fk_product, d.product_type, d.qty,';
-			$sql .= ' d.date_ouverture_prevue as date_start, d.date_fin_validite as date_end, p.duration as service_duration';
+			$sql .= ' d.date_ouverture_prevue as date_start, d.date_fin_validite as date_end, p.duration as service_duration, c.statut as parent_status';
 			$sql .= ' FROM '.MAIN_DB_PREFIX.'contratdet d';
 			$sql .= ' LEFT JOIN '.MAIN_DB_PREFIX.'product p ON p.rowid = d.fk_product';
+			$sql .= ' INNER JOIN '.MAIN_DB_PREFIX.'contrat c ON c.rowid = d.fk_contrat';
 		}
 		$sql .= ' WHERE d.rowid = '.((int) $lineId);
 		$resql = $this->db->query($sql);
@@ -131,9 +162,10 @@ class InterfaceResourceReservations extends DolibarrTriggers
 	 * @param object $line Normalized line
 	 * @param User $user Current user
 	 * @param Translate $langs Translation handler
+	 * @param bool|null $forceConfirmed Force final capacity allocation during validation
 	 * @return int<-1,1>
 	 */
-	private function synchronizeLineReservation($elementType, $line, User $user, Translate $langs)
+	private function synchronizeLineReservation($elementType, $line, User $user, Translate $langs, $forceConfirmed = null)
 	{
 		if ($this->deleteLineReservation($elementType, (int) $line->rowid) < 0) {
 			return -1;
@@ -154,7 +186,9 @@ class InterfaceResourceReservations extends DolibarrTriggers
 			return 1;
 		}
 
-		$isConfirmed = ($elementType === 'contratdet');
+		$isConfirmed = $forceConfirmed !== null
+			? (bool) $forceConfirmed
+			: ($elementType === 'contratdet' && !empty($line->parent_status));
 		$groups = array();
 		while ($preference = $this->db->fetch_object($resql)) {
 			$group = !empty($preference->requirement_group) ? $preference->requirement_group : 'row_'.$preference->rowid;
@@ -214,13 +248,68 @@ class InterfaceResourceReservations extends DolibarrTriggers
 				if ($needsAutomaticSlot && (empty($dateStart) || empty($dateEnd))) {
 					continue;
 				}
-				if (!$isConfirmed || (empty($dateStart) || empty($dateEnd)) || $manager->canReserve('dolresource', (int) $preference->resource_id, $dateStart, $dateEnd, $capacityUsed, $maximumCapacity)) {
+				$fitsResourceCapacity = $capacityUsed > 0 && $capacityUsed <= $maximumCapacity;
+				$canAllocate = !$isConfirmed
+					? $fitsResourceCapacity
+					: ((!empty($dateStart) && !empty($dateEnd)) && $manager->canReserve('dolresource', (int) $preference->resource_id, $dateStart, $dateEnd, $capacityUsed, $maximumCapacity));
+				if ($canAllocate) {
 					$selected = $preference;
 					$selected->capacity_used = $capacityUsed;
 					$selected->assignment_start = $dateStart;
 					$selected->assignment_end = $dateEnd;
 					break;
 				}
+			}
+			// When the complete quantity cannot fit in one alternative, allocate
+			// whole service units independently.  This is the usual hotel-room
+			// case: quantity 2 must reserve two rooms of capacity 2, not consume
+			// four places from a single room.
+			$splitAssignments = array();
+			$wholeQuantity = (int) abs((float) $line->qty);
+			if (!$selected && $wholeQuantity > 1 && (float) $wholeQuantity === abs((float) $line->qty)) {
+				$stagedCapacity = array();
+				for ($unit = 0; $unit < $wholeQuantity; $unit++) {
+					$unitSelection = null;
+					foreach ($alternatives as $preference) {
+						$capacityUsed = (float) $preference->users_per_service_unit;
+						$dateStart = $commonStart;
+						$dateEnd = $commonEnd;
+						$cooldown = max(0, (int) $preference->cooldown_minutes);
+						$maximumCapacity = ($preference->capacity_mode === 'users') ? (float) $preference->max_users : 1.0;
+						if (!empty($dateEnd) && $cooldown > 0) {
+							$dateEnd = $this->db->idate($this->db->jdate($dateEnd) + ($cooldown * 60));
+						}
+						if (empty($dateStart) || empty($dateEnd) || $capacityUsed <= 0 || $capacityUsed > $maximumCapacity) {
+							continue;
+						}
+						$resourceId = (int) $preference->resource_id;
+						$alreadyStaged = isset($stagedCapacity[$resourceId]) ? $stagedCapacity[$resourceId] : 0.0;
+						$occupied = $isConfirmed ? $manager->getOccupiedCapacity('dolresource', $resourceId, $dateStart, $dateEnd) : 0.0;
+						if (($occupied + $alreadyStaged + $capacityUsed) > $maximumCapacity) {
+							continue;
+						}
+						$unitSelection = clone $preference;
+						$unitSelection->capacity_used = $capacityUsed;
+						$unitSelection->assignment_start = $dateStart;
+						$unitSelection->assignment_end = $dateEnd;
+						$stagedCapacity[$resourceId] = $alreadyStaged + $capacityUsed;
+						break;
+					}
+					if (!$unitSelection) {
+						$splitAssignments = array();
+						break;
+					}
+					$splitAssignments[] = $unitSelection;
+				}
+			}
+			if (!empty($splitAssignments)) {
+				foreach ($splitAssignments as $splitAssignment) {
+					if (!$this->insertAssignment($elementType, $line, $splitAssignment, 1.0, $isConfirmed, $user)) {
+						$this->deleteLineReservation($elementType, (int) $line->rowid);
+						return -1;
+					}
+				}
+				continue;
 			}
 			if (!$selected) {
 				if (empty($alternatives[0]->mandatory)) {
@@ -234,21 +323,30 @@ class InterfaceResourceReservations extends DolibarrTriggers
 				$commonStart = $selected->assignment_start;
 				$commonEnd = $selected->assignment_end;
 			}
-			$sql = 'INSERT INTO '.MAIN_DB_PREFIX.'element_resources (';
-			$sql .= 'element_id, element_type, resource_id, resource_type, busy, mandatory, position, relation_kind, resource_role, requirement_group,';
-			$sql .= ' users_per_service_unit, service_quantity, service_duration, capacity_used, date_start, date_end, reservation_status, fk_user_create';
-			$sql .= ') VALUES (';
-			$sql .= ((int) $line->rowid).", '".$this->db->escape($elementType)."', ".((int) $selected->resource_id).", 'dolresource', 1, ".(!empty($selected->mandatory) ? 1 : 0).", ".((int) $selected->position).", 'assignment', '";
-			$sql .= $this->db->escape($selected->resource_role ?: 'capacity')."', ".(!empty($selected->requirement_group) ? "'".$this->db->escape($selected->requirement_group)."'" : 'NULL').', ';
-			$sql .= price2num($selected->users_per_service_unit, 'MS').', '.price2num($line->qty, 'MS').', ';
-			$sql .= (!empty($line->service_duration) ? "'".$this->db->escape($line->service_duration)."'" : 'NULL').', '.price2num($selected->capacity_used, 'MS').', ';
-			$sql .= (!empty($selected->assignment_start) ? "'".$this->db->escape($selected->assignment_start)."'" : 'NULL').', ';
-			$sql .= (!empty($selected->assignment_end) ? "'".$this->db->escape($selected->assignment_end)."'" : 'NULL').", '".($isConfirmed ? 'confirmed' : 'provisional')."', ".((int) $user->id).')';
-			if (!$this->db->query($sql)) {
-				$this->errors[] = $this->db->lasterror();
+			if (!$this->insertAssignment($elementType, $line, $selected, (float) $line->qty, $isConfirmed, $user)) {
 				return -1;
 			}
 		}
 		return 1;
+	}
+
+	/** Insert one normalized assignment row. */
+	private function insertAssignment($elementType, $line, $selected, $serviceQuantity, $isConfirmed, User $user)
+	{
+		$sql = 'INSERT INTO '.MAIN_DB_PREFIX.'element_resources (';
+		$sql .= 'element_id, element_type, resource_id, resource_type, busy, mandatory, position, relation_kind, resource_role, requirement_group,';
+		$sql .= ' users_per_service_unit, service_quantity, service_duration, capacity_used, date_start, date_end, reservation_status, fk_user_create';
+		$sql .= ') VALUES (';
+		$sql .= ((int) $line->rowid).", '".$this->db->escape($elementType)."', ".((int) $selected->resource_id).", 'dolresource', 1, ".(!empty($selected->mandatory) ? 1 : 0).", ".((int) $selected->position).", 'assignment', '";
+		$sql .= $this->db->escape($selected->resource_role ?: 'capacity')."', ".(!empty($selected->requirement_group) ? "'".$this->db->escape($selected->requirement_group)."'" : 'NULL').', ';
+		$sql .= price2num($selected->users_per_service_unit, 'MS').', '.price2num($serviceQuantity, 'MS').', ';
+		$sql .= (!empty($line->service_duration) ? "'".$this->db->escape($line->service_duration)."'" : 'NULL').', '.price2num($selected->capacity_used, 'MS').', ';
+		$sql .= (!empty($selected->assignment_start) ? "'".$this->db->escape($selected->assignment_start)."'" : 'NULL').', ';
+		$sql .= (!empty($selected->assignment_end) ? "'".$this->db->escape($selected->assignment_end)."'" : 'NULL').", '".($isConfirmed ? 'confirmed' : 'provisional')."', ".((int) $user->id).')';
+		if (!$this->db->query($sql)) {
+			$this->errors[] = $this->db->lasterror();
+			return false;
+		}
+		return true;
 	}
 }

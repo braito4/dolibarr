@@ -157,6 +157,36 @@ class ResourceReservationTest extends TestCase
 	}
 
 	/**
+	 * Multiple whole service units use different alternatives when one resource
+	 * cannot hold the complete line quantity.
+	 *
+	 * @return void
+	 */
+	public function testContractQuantitySplitsAcrossAlternativeRooms(): void
+	{
+		$sql = 'UPDATE '.MAIN_DB_PREFIX.'element_resources SET users_per_service_unit = 2';
+		$sql .= ' WHERE element_id = '.((int) $this->serviceId);
+		$this->assertTrue((bool) $this->db->query($sql));
+		$sql = 'UPDATE '.MAIN_DB_PREFIX.'resource SET max_users = 2';
+		$sql .= ' WHERE rowid IN ('.((int) $this->firstResourceId).','.((int) $this->secondResourceId).')';
+		$this->assertTrue((bool) $this->db->query($sql));
+		$lineId = $this->createContractLine(2.0, '2026-10-10 00:00:00', '2026-10-11 00:00:00');
+
+		$this->assertSame(1, $this->runLineTrigger('LINECONTRACT_INSERT', $lineId));
+		$this->assertSame(2, $this->countReservations('contratdet', $lineId));
+		$sql = 'SELECT resource_id, service_quantity, capacity_used FROM '.MAIN_DB_PREFIX.'element_resources';
+		$sql .= " WHERE element_type = 'contratdet' AND element_id = ".((int) $lineId).' ORDER BY resource_id';
+		$resql = $this->db->query($sql);
+		$first = $this->db->fetch_object($resql);
+		$second = $this->db->fetch_object($resql);
+		$this->assertNotSame((int) $first->resource_id, (int) $second->resource_id);
+		$this->assertEquals(1.0, $first->service_quantity);
+		$this->assertEquals(2.0, $first->capacity_used);
+		$this->assertEquals(1.0, $second->service_quantity);
+		$this->assertEquals(2.0, $second->capacity_used);
+	}
+
+	/**
 	 * Confirmed reservations outside the requested period do not consume capacity.
 	 *
 	 * @return void
@@ -200,6 +230,21 @@ class ResourceReservationTest extends TestCase
 
 		$this->assertTrue($resource->isBusy('2026-10-10 08:00:00', '2026-10-11 08:00:00'));
 		$this->assertFalse($resource->isBusy('2026-12-01 08:00:00', '2026-12-02 08:00:00'));
+	}
+
+	/**
+	 * A full resource reports Occupied for the reserved interval only.
+	 *
+	 * @return void
+	 */
+	public function testAvailabilityStatusIsOccupiedForReservedPeriod(): void
+	{
+		$this->insertReservation($this->secondResourceId, 'contratdet', 999008, 2.0, 'confirmed');
+		$resource = new Dolresource($this->db);
+		$this->assertGreaterThan(0, $resource->fetch($this->secondResourceId));
+
+		$this->assertStringContainsString('Occupied', $resource->getLibAvailabilityStatus('2026-10-10 08:00:00', '2026-10-11 08:00:00'));
+		$this->assertStringContainsString('Free', $resource->getLibAvailabilityStatus('2026-12-01 08:00:00', '2026-12-02 08:00:00'));
 	}
 
 	/**
@@ -261,6 +306,52 @@ class ResourceReservationTest extends TestCase
 		$this->assertSame(-1, $this->runLineTrigger('LINECONTRACT_INSERT', $lineId));
 		$this->assertNull($this->fetchReservation('contratdet', $lineId));
 		$this->assertNotEmpty($this->trigger->errors);
+	}
+
+	/**
+	 * Draft contracts remain provisional and capacity is enforced on validation.
+	 *
+	 * @return void
+	 */
+	public function testDraftContractIsRecheckedWhenValidated(): void
+	{
+		$this->insertReservation($this->firstResourceId, 'contratdet', 999009, 6.0, 'confirmed');
+		$this->insertReservation($this->secondResourceId, 'contratdet', 999010, 2.0, 'confirmed');
+		$lineId = $this->createContractLine(1.0, '2026-10-10 08:00:00', '2026-10-11 08:00:00', 0);
+
+		$this->assertSame(1, $this->runLineTrigger('LINECONTRACT_INSERT', $lineId));
+		$this->assertSame('provisional', $this->fetchReservation('contratdet', $lineId)->reservation_status);
+		$sql = 'SELECT fk_contrat FROM '.MAIN_DB_PREFIX.'contratdet WHERE rowid = '.((int) $lineId);
+		$contractId = (int) $this->db->fetch_object($this->db->query($sql))->fk_contrat;
+		$this->assertSame(-1, $this->runObjectTrigger('CONTRACT_VALIDATE', $contractId));
+		$this->assertNull($this->fetchReservation('contratdet', $lineId));
+		$this->assertNotEmpty($this->trigger->errors);
+	}
+
+	/**
+	 * A provisional line may overlap other drafts but cannot exceed one
+	 * resource's intrinsic capacity.
+	 *
+	 * @return void
+	 */
+	public function testDraftQuantityStillSplitsAcrossAlternativeRooms(): void
+	{
+		$sql = 'UPDATE '.MAIN_DB_PREFIX.'element_resources SET users_per_service_unit = 2';
+		$sql .= ' WHERE element_id = '.((int) $this->serviceId);
+		$this->assertTrue((bool) $this->db->query($sql));
+		$sql = 'UPDATE '.MAIN_DB_PREFIX.'resource SET max_users = 2';
+		$sql .= ' WHERE rowid IN ('.((int) $this->firstResourceId).','.((int) $this->secondResourceId).')';
+		$this->assertTrue((bool) $this->db->query($sql));
+		$lineId = $this->createContractLine(2.0, '2026-10-10 00:00:00', '2026-10-11 00:00:00', 0);
+
+		$this->assertSame(1, $this->runLineTrigger('LINECONTRACT_INSERT', $lineId));
+		$this->assertSame(2, $this->countReservations('contratdet', $lineId));
+		$sql = 'SELECT COUNT(DISTINCT resource_id) as nb, MAX(capacity_used) as maximum_used';
+		$sql .= ' FROM '.MAIN_DB_PREFIX.'element_resources';
+		$sql .= " WHERE element_type = 'contratdet' AND element_id = ".((int) $lineId);
+		$row = $this->db->fetch_object($this->db->query($sql));
+		$this->assertSame(2, (int) $row->nb);
+		$this->assertEquals(2.0, $row->maximum_used);
 	}
 
 	/**
@@ -423,8 +514,34 @@ class ResourceReservationTest extends TestCase
 		$this->assertGreaterThan(0, $reloaded->fetch($this->firstResourceId));
 		$this->assertSame('none', $reloaded->capacity_mode);
 		$this->assertSame(1, $reloaded->supports_cooldown);
-		$this->assertEquals(1200.5, $reloaded->metric_value);
+		$this->assertNull($reloaded->metric_value);
 		$this->assertSame(30, $reloaded->cooldown_minutes);
+	}
+
+	/**
+	 * A resource type clears characteristics that do not apply to it.
+	 *
+	 * @return void
+	 */
+	public function testResourceTypeCapabilitiesLimitStoredValues(): void
+	{
+		global $user;
+		$resource = new Dolresource($this->db);
+		$this->assertGreaterThan(0, $resource->fetch($this->firstResourceId));
+		$resource->fk_code_type_resource = 'RES_CARS';
+		$resource->max_users = 9;
+		$resource->allow_overflow = 1;
+		$resource->metric_value = 12500.5;
+		$resource->cooldown_minutes = 45;
+		$this->assertGreaterThan(0, $resource->update($user));
+
+		$reloaded = new Dolresource($this->db);
+		$this->assertGreaterThan(0, $reloaded->fetch($this->firstResourceId));
+		$this->assertSame('custom', $reloaded->capacity_mode);
+		$this->assertNull($reloaded->max_users);
+		$this->assertSame(0, $reloaded->allow_overflow);
+		$this->assertEquals(12500.5, $reloaded->metric_value);
+		$this->assertSame(0, $reloaded->cooldown_minutes);
 	}
 
 	/**
@@ -520,10 +637,10 @@ class ResourceReservationTest extends TestCase
 	}
 
 	/** @return int */
-	private function createContractLine($qty, $dateStart, $dateEnd)
+	private function createContractLine($qty, $dateStart, $dateEnd, $status = 1)
 	{
 		global $user;
-		$contractId = $this->insert('contrat', array('ref' => 'PHPUNIT-CONTRACT', 'fk_soc' => $this->thirdPartyId, 'fk_user_author' => $user->id, 'entity' => 1));
+		$contractId = $this->insert('contrat', array('ref' => 'PHPUNIT-CONTRACT', 'fk_soc' => $this->thirdPartyId, 'fk_user_author' => $user->id, 'entity' => 1, 'statut' => $status));
 		return $this->insert('contratdet', array(
 			'fk_contrat' => $contractId,
 			'fk_product' => $this->serviceId,
@@ -557,6 +674,15 @@ class ResourceReservationTest extends TestCase
 		$object = new stdClass();
 		$object->id = $lineId;
 		$object->context = array();
+		return $this->trigger->runTrigger($action, $object, $user, $langs, $conf);
+	}
+
+	/** @return int */
+	private function runObjectTrigger($action, $objectId)
+	{
+		global $user, $langs, $conf;
+		$object = new stdClass();
+		$object->id = $objectId;
 		return $this->trigger->runTrigger($action, $object, $user, $langs, $conf);
 	}
 

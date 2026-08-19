@@ -779,7 +779,10 @@ if (!$ret) {
 			$defaulttpldir = '/core/tpl';
 			$dirtpls = array_merge($conf->modules_parts['tpl'], array($defaulttpldir), array($path.$defaulttpldir));
 
-			foreach ($dirtpls as $module => $reldir) {
+			// Do not render the add form while editing an existing link. Apart
+			// from reducing clutter, this avoids duplicate field identifiers that
+			// made labels and JavaScript target the wrong form.
+			if ($mode !== 'edit') foreach ($dirtpls as $module => $reldir) {
 				if (file_exists(dol_buildpath($reldir.'/resource_'.$element_prop['element'].'_add.tpl.php'))) {
 					$tpl = dol_buildpath($reldir.'/resource_'.$element_prop['element'].'_add.tpl.php');
 				} else {

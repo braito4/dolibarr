@@ -38,6 +38,7 @@ class Dolresource extends CommonObject
 	public const STATUS_UNKNOWN = 0;
 	public const STATUS_FREE = 1;
 	public const STATUS_OUT_OF_SERVICE = 2;
+	public const STATUS_OCCUPIED = 3;
 
 	/**
 	 * @var string ID to identify managed object
@@ -204,6 +205,36 @@ class Dolresource extends CommonObject
 	}
 
 	/**
+	 * Apply the capabilities declared by the selected resource type.
+	 *
+	 * Unsupported values are cleared here so every entry point (UI, API or
+	 * import) follows the same rules.
+	 *
+	 * @return void
+	 */
+	public function applyTypeCapabilities()
+	{
+		$sql = 'SELECT capacity_mode, metric_label, metric_unit, supports_cooldown';
+		$sql .= ' FROM '.MAIN_DB_PREFIX.'c_type_resource';
+		$sql .= " WHERE code = '".$this->db->escape((string) $this->fk_code_type_resource)."'";
+		$model = $this->db->fetch_object($this->db->query($sql));
+		$this->capacity_mode = $model ? ($model->capacity_mode ?: 'none') : 'none';
+		$this->metric_label = $model ? $model->metric_label : null;
+		$this->metric_unit = $model ? $model->metric_unit : null;
+		$this->supports_cooldown = $model ? (int) $model->supports_cooldown : 0;
+		if ($this->capacity_mode !== 'users') {
+			$this->max_users = null;
+			$this->allow_overflow = 0;
+		}
+		if ($this->capacity_mode !== 'custom') {
+			$this->metric_value = null;
+		}
+		if (!$this->supports_cooldown) {
+			$this->cooldown_minutes = 0;
+		}
+	}
+
+	/**
 	 * Create object in database
 	 *
 	 * @param	User		$user		User that creates
@@ -216,6 +247,7 @@ class Dolresource extends CommonObject
 
 		$error = 0;
 		$this->date_creation = dol_now();
+		$this->applyTypeCapabilities();
 
 		// Clean parameters
 		$new_resource_values = [
@@ -434,6 +466,7 @@ class Dolresource extends CommonObject
 		global $conf, $langs;
 		$error = 0;
 		$this->date_modification = dol_now();
+		$this->applyTypeCapabilities();
 
 		// Clean parameters
 		if (isset($this->ref)) {
@@ -1188,10 +1221,13 @@ class Dolresource extends CommonObject
 		global $langs;
 		$langs->load('resource');
 		$labels = self::getStatusArray();
+		$labels[self::STATUS_OCCUPIED] = $langs->trans('ResourceStatusOccupied');
 		$label = $labels[$status] ?? $labels[self::STATUS_UNKNOWN];
 		$statusType = 'status1';
 		if ($status === self::STATUS_FREE) {
 			$statusType = 'status4';
+		} elseif ($status === self::STATUS_OCCUPIED) {
+			$statusType = 'status3';
 		} elseif ($status === self::STATUS_OUT_OF_SERVICE) {
 			$statusType = 'status8';
 		}
@@ -1278,6 +1314,23 @@ class Dolresource extends CommonObject
 	public function isBusy($dateStart = null, $dateEnd = null)
 	{
 		return $this->max_users > 0 && $this->getOccupiedCapacity($dateStart, $dateEnd) >= (float) $this->max_users;
+	}
+
+	/**
+	 * Return the calculated availability label for a time range.
+	 *
+	 * @param string $dateStart Start date in database format
+	 * @param string $dateEnd End date in database format
+	 * @param int<0,6> $mode Status rendering mode
+	 * @return string
+	 */
+	public function getLibAvailabilityStatus($dateStart, $dateEnd, int $mode = 0)
+	{
+		$status = $this->status;
+		if ($status === self::STATUS_FREE && $this->isBusy($dateStart, $dateEnd)) {
+			$status = self::STATUS_OCCUPIED;
+		}
+		return self::getLibStatusLabel($status, $mode);
 	}
 
 	/**

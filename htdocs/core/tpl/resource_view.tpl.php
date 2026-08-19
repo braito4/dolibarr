@@ -158,6 +158,11 @@ if ((array) $linked_resources && count($linked_resources) > 0) {
 				print ' · '.$langs->trans('EndInputMode').': '.$langs->trans('TimeInput'.ucfirst($linked_resource['end_input_mode']));
 				print ' · '.$langs->trans('TimePrecision').': '.$langs->trans('TimePrecision'.ucfirst($linked_resource['time_precision']));
 				print ' · '.$langs->trans('ResourceQuantityRequired').': '.price($linked_resource['quantity_required']);
+				if (!empty($linked_resource['requirement_group'])) {
+					print ' · '.$langs->trans('RequirementGroup').': <strong>'.dol_escape_htmltag($linked_resource['requirement_group']).'</strong>';
+				}
+				print ' · '.$langs->trans('Mandatory').': '.yn($linked_resource['mandatory']);
+				print ' · '.$langs->trans('SimultaneousRequirement').': '.yn($linked_resource['simultaneous']);
 				print ' · '.$langs->trans('DurationOfRange').': '.((int) $linked_resource['duration_base']).' + '.((int) $linked_resource['duration_per_unit']).' × '.$langs->trans('Unit');
 				if ($linked_resource['setup_duration'] || $linked_resource['cleanup_duration']) print ' · +'.((int) $linked_resource['setup_duration']).'/+'.((int) $linked_resource['cleanup_duration']).' min';
 				print '</div>';
