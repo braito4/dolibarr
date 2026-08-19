@@ -275,7 +275,7 @@ class InterfaceResourceReservations extends DolibarrTriggers
 		}
 		foreach ($groups as $alternatives) {
 			if (!empty($alternatives[0]->selection_policy) && $alternatives[0]->selection_policy === 'smallest_sufficient') {
-				usort($alternatives, static function ($left, $right) {
+				usort($alternatives, static function (stdClass $left, stdClass $right) {
 					return (float) $left->metric_value <=> (float) $right->metric_value;
 				});
 			}
