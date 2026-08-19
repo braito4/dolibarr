@@ -35,6 +35,7 @@
 @phan-var-force string $element
 @phan-var-force int $element_id
 @phan-var-force string $element_ref
+@phan-var-force Translate $langs
 ';
 // Protection to avoid direct call of template
 if (empty($conf) || !is_object($conf)) {
@@ -45,9 +46,11 @@ if (empty($conf) || !is_object($conf)) {
 
 require_once DOL_DOCUMENT_ROOT.'/resource/class/html.formresource.class.php';
 
+global $langs;
+
 $form = new Form($db);
 $formresources = new FormResource($db);
-$resourceHelpLabel = function ($labelKey) use ($form, $langs) {
+$resourceHelpLabel = function (string $labelKey) use ($form, $langs): string {
 	return $form->textwithpicto($langs->trans($labelKey), $langs->trans($labelKey.'Help'));
 };
 

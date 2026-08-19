@@ -170,14 +170,17 @@ if (empty($reshook)) {
 		$resql = $db->query($sql);
 		$current = $resql ? $db->fetch_object($resql) : null;
 		if ($current) {
-			$operator = ($direction == 'up' ? '<' : '>');
-			$sortorder = ($direction == 'up' ? 'DESC' : 'ASC');
 			$sql = "SELECT rowid, position FROM ".MAIN_DB_PREFIX."element_resources";
 			$sql .= " WHERE element_id = ".((int) $element_id);
 			$sql .= " AND element_type = '".$db->escape($element)."'";
 			$sql .= " AND resource_type = '".$db->escape($resource_type)."'";
-			$sql .= " AND position ".$operator." ".((int) $current->position);
-			$sql .= " ORDER BY position ".$sortorder.", rowid ".$sortorder;
+			if ($direction == 'up') {
+				$sql .= " AND position < ".((int) $current->position);
+				$sql .= " ORDER BY position DESC, rowid DESC";
+			} else {
+				$sql .= " AND position > ".((int) $current->position);
+				$sql .= " ORDER BY position ASC, rowid ASC";
+			}
 			$sql .= $db->plimit(1);
 			$resql = $db->query($sql);
 			$swap = $resql ? $db->fetch_object($resql) : null;
