@@ -189,8 +189,9 @@ class ResourceReservationManager extends ResourceRequirementManager
 		if (empty($resourceIds) || empty($dateStart) || empty($dateEnd) || $dateStart >= $dateEnd) {
 			return $assignments;
 		}
+		$sqlResourceIds = implode(',', $resourceIds);
 		$sql = 'SELECT resource_id, date_start, date_end, capacity_used FROM '.MAIN_DB_PREFIX.'element_resources';
-		$sql .= ' WHERE resource_id IN ('.implode(',', $resourceIds).')';
+		$sql .= ' WHERE resource_id IN ('.$sqlResourceIds.')';
 		$sql .= " AND resource_type = '".$this->db->escape($resourceType)."'";
 		$sql .= " AND reservation_status = 'confirmed'";
 		$sql .= " AND (relation_kind = 'assignment' OR relation_kind IS NULL)";
@@ -278,9 +279,9 @@ class ResourceReservationManager extends ResourceRequirementManager
 		$maximum = isset($assignment['maximum_capacity']) ? (float) $assignment['maximum_capacity'] : null;
 		$lockSql = '';
 		if ($resourceType === 'dolresource') {
-			$lockSql = 'SELECT rowid FROM '.MAIN_DB_PREFIX.'resource WHERE rowid = '.$resourceId.' FOR UPDATE';
+			$lockSql = 'SELECT rowid FROM '.MAIN_DB_PREFIX.'resource WHERE rowid = '.((int) $resourceId).' FOR UPDATE';
 		} elseif ($resourceType === 'bookcal_calendar') {
-			$lockSql = 'SELECT rowid FROM '.MAIN_DB_PREFIX.'bookcal_calendar WHERE rowid = '.$resourceId.' FOR UPDATE';
+			$lockSql = 'SELECT rowid FROM '.MAIN_DB_PREFIX.'bookcal_calendar WHERE rowid = '.((int) $resourceId).' FOR UPDATE';
 		}
 		if ($lockSql && !$this->db->query($lockSql)) {
 			return -1;
@@ -292,7 +293,7 @@ class ResourceReservationManager extends ResourceRequirementManager
 		$sql .= 'element_id, element_type, resource_id, resource_type, busy, mandatory, position, relation_kind, resource_role,';
 		$sql .= ' service_quantity, capacity_used, date_start, date_end, reservation_status, fk_user_create';
 		$sql .= ') VALUES (';
-		$sql .= ((int) $assignment['element_id']).", '".$this->db->escape($assignment['element_type'])."', ".$resourceId.", '".$this->db->escape($resourceType)."', 1, ";
+		$sql .= ((int) $assignment['element_id']).", '".$this->db->escape($assignment['element_type'])."', ".((int) $resourceId).", '".$this->db->escape($resourceType)."', 1, ";
 		$sql .= (!empty($assignment['mandatory']) ? 1 : 0).', '.((int) (!empty($assignment['position']) ? $assignment['position'] : 0));
 		$sql .= ", 'assignment', '".$this->db->escape(!empty($assignment['resource_role']) ? $assignment['resource_role'] : 'capacity')."', ";
 		$sql .= price2num(isset($assignment['service_quantity']) ? $assignment['service_quantity'] : 1, 'MS').', '.price2num($capacity, 'MS').', ';

@@ -69,8 +69,8 @@ class InterfaceResourceReservations extends DolibarrTriggers
 			$lineId = (int) $object->context['line_id'];
 		} elseif (!empty($object->id)) {
 			$lineId = (int) $object->id;
-		} elseif (!empty($object->rowid)) {
-			$lineId = (int) $object->rowid;
+		} elseif (!empty(get_object_vars($object)['rowid'])) {
+			$lineId = (int) get_object_vars($object)['rowid'];
 		}
 		if ($lineId <= 0) {
 			return 0;

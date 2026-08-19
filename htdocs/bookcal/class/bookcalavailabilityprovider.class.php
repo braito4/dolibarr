@@ -217,7 +217,7 @@ class BookCalAvailabilityProvider
 		$obj = $this->db->fetch_object($this->db->query($sql));
 		$timezone = $obj && !empty($obj->timezone) ? (string) $obj->timezone : 'UTC';
 		try {
-			new DateTimeZone($timezone);
+			$timezone = (new DateTimeZone($timezone))->getName();
 		} catch (Exception $exception) {
 			$timezone = 'UTC';
 		}

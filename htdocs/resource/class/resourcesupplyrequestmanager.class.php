@@ -51,7 +51,7 @@ class ResourceSupplyRequestManager
 		$sql .= 'entity, fk_element_resource, fk_resource, request_type, fk_soc_supplier, fk_product_supplier,';
 		$sql .= ' quantity_requested, date_start, date_end, timezone, request_status, date_creation, fk_user_create';
 		$sql .= ') VALUES (';
-		$sql .= ((int) ($request['entity'] ?? 1)).', '.$assignmentId.', '.$resourceId.', ';
+		$sql .= ((int) ($request['entity'] ?? 1)).', '.((int) $assignmentId).', '.((int) $resourceId).', ';
 		$sql .= "'".$this->db->escape((string) ($request['request_type'] ?? 'owner'))."', ";
 		$sql .= (!empty($request['fk_soc_supplier']) ? ((int) $request['fk_soc_supplier']) : 'NULL').', ';
 		$sql .= (!empty($request['fk_product_supplier']) ? ((int) $request['fk_product_supplier']) : 'NULL').', ';
@@ -146,7 +146,7 @@ class ResourceSupplyRequestManager
 		if ($status === null || $supplierOrderId <= 0) {
 			return 0;
 		}
-		$sql = 'UPDATE '.$this->db->prefix().'resource_supply_request SET request_status=\''.$status.'\',';
+		$sql = 'UPDATE '.$this->db->prefix()."resource_supply_request SET request_status='".$this->db->escape($status)."',";
 		$sql .= " supplier_order_status='".$this->db->escape($action)."', fk_user_modif=".((int) $user->id);
 		$sql .= ' WHERE fk_supplier_order='.((int) $supplierOrderId);
 		if ($status === self::STATUS_REQUESTED) {
