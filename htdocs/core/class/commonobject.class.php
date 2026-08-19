@@ -6101,6 +6101,7 @@ abstract class CommonObject
 		$sql .= ", relation_kind, resource_role, requirement_group, quantity_required";
 		$sql .= ", duration_base, duration_per_unit, setup_duration, cleanup_duration";
 		$sql .= ", scheduling_mode, start_input_mode, end_input_mode, time_precision, simultaneous, allow_split";
+		$sql .= ", context_scope, demand_source, capacity_metrics, selection_policy";
 		$sql .= ") VALUES (";
 		$sql .= ((int) $resource_id);
 		$sql .= ", '".$this->db->escape($resource_type)."'";
@@ -6124,6 +6125,10 @@ abstract class CommonObject
 		$sql .= ", '".$this->db->escape(!empty($requirement['time_precision']) ? $requirement['time_precision'] : 'minute')."'";
 		$sql .= ", ".(!isset($requirement['simultaneous']) || !empty($requirement['simultaneous']) ? 1 : 0);
 		$sql .= ", ".(!empty($requirement['allow_split']) ? 1 : 0);
+		$sql .= ", '".$this->db->escape(!empty($requirement['context_scope']) ? $requirement['context_scope'] : 'service_line')."'";
+		$sql .= ", '".$this->db->escape(!empty($requirement['demand_source']) ? $requirement['demand_source'] : 'service_quantity')."'";
+		$sql .= ", '".$this->db->escape(!empty($requirement['capacity_metrics']) ? $requirement['capacity_metrics'] : 'units')."'";
+		$sql .= ", '".$this->db->escape(!empty($requirement['selection_policy']) ? $requirement['selection_policy'] : 'preference_order')."'";
 		$sql .= ")";
 
 		dol_syslog(get_class($this)."::add_element_resource", LOG_DEBUG);

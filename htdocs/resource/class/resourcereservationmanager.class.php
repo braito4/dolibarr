@@ -59,6 +59,43 @@ class ResourceReservationManager extends ResourceRequirementManager
 	}
 
 	/**
+	 * Calculate the volume of every product line in the same commercial document.
+	 *
+	 * Volumes are normalized to cubic metres, consistently with
+	 * CommonObject::getTotalWeightVolume().
+	 *
+	 * @param string $elementType propaldet, commandedet or contratdet
+	 * @param int    $parentId    Proposal, order or contract id
+	 * @return float Volume in cubic metres
+	 */
+	public function calculateDocumentProductVolume($elementType, $parentId)
+	{
+		$tableMap = array(
+			'propaldet' => array('table' => 'propaldet', 'parent' => 'fk_propal'),
+			'commandedet' => array('table' => 'commandedet', 'parent' => 'fk_commande'),
+			'contratdet' => array('table' => 'contratdet', 'parent' => 'fk_contrat'),
+		);
+		if (empty($tableMap[$elementType]) || $parentId <= 0) {
+			return 0.0;
+		}
+
+		$mapping = $tableMap[$elementType];
+		$sql = 'SELECT d.qty, p.volume, p.volume_units';
+		$sql .= ' FROM '.MAIN_DB_PREFIX.$mapping['table'].' d';
+		$sql .= ' INNER JOIN '.MAIN_DB_PREFIX.'product p ON p.rowid = d.fk_product';
+		$sql .= ' WHERE d.'.$mapping['parent'].' = '.((int) $parentId);
+		$sql .= ' AND d.product_type = 0';
+		$resql = $this->db->query($sql);
+		$totalVolume = 0.0;
+		while ($resql && ($productLine = $this->db->fetch_object($resql))) {
+			$unitFactor = (int) $productLine->volume_units < 50 ? pow(10, (int) $productLine->volume_units) : 1.0;
+			$totalVolume += abs((float) $productLine->qty) * (float) $productLine->volume * $unitFactor;
+		}
+
+		return $totalVolume;
+	}
+
+	/**
 	 * Find the first available interval for a resource.
 	 *
 	 * Resource time-slot rules are optional. With no rules, the resource is
@@ -88,14 +125,14 @@ class ResourceReservationManager extends ResourceRequirementManager
 				$rules[] = $rule;
 			}
 			if ($maximumCapacity === null) {
-				$sql = 'SELECT r.max_users, r.fk_statut, ty.capacity_mode FROM '.MAIN_DB_PREFIX.'resource r';
+				$sql = 'SELECT r.max_users, r.metric_value, r.fk_statut, ty.capacity_mode FROM '.MAIN_DB_PREFIX.'resource r';
 				$sql .= ' LEFT JOIN '.MAIN_DB_PREFIX.'c_type_resource ty ON ty.code = r.fk_code_type_resource';
 				$sql .= ' WHERE r.rowid = '.((int) $resourceId);
 				$resource = $this->db->fetch_object($this->db->query($sql));
 				if (!$resource || (int) $resource->fk_statut !== 1) {
 					return null;
 				}
-				$maximumCapacity = ($resource->capacity_mode === 'users') ? (float) $resource->max_users : 1.0;
+				$maximumCapacity = $this->getResourceMaximumCapacity($resource);
 			}
 		}
 		if ($maximumCapacity === null) {
@@ -246,14 +283,14 @@ class ResourceReservationManager extends ResourceRequirementManager
 			return false;
 		}
 		if ($maximumCapacity === null && $resourceType === 'dolresource') {
-			$sql = 'SELECT r.max_users, r.fk_statut, ty.capacity_mode FROM '.MAIN_DB_PREFIX.'resource r';
+			$sql = 'SELECT r.max_users, r.metric_value, r.fk_statut, ty.capacity_mode FROM '.MAIN_DB_PREFIX.'resource r';
 			$sql .= ' LEFT JOIN '.MAIN_DB_PREFIX.'c_type_resource ty ON ty.code = r.fk_code_type_resource';
 			$sql .= ' WHERE r.rowid = '.((int) $resourceId);
 			$obj = $this->db->fetch_object($this->db->query($sql));
 			if (!$obj || (int) $obj->fk_statut !== 1) {
 				return false;
 			}
-			$maximumCapacity = ($obj->capacity_mode === 'users') ? (float) $obj->max_users : 1.0;
+			$maximumCapacity = $this->getResourceMaximumCapacity($obj);
 		}
 		if ($maximumCapacity === null) {
 			$maximumCapacity = 1.0;
@@ -422,7 +459,7 @@ class ResourceReservationManager extends ResourceRequirementManager
 	 */
 	private function findReplacement(array $reservation, array $planned)
 	{
-		$sql = 'SELECT er.resource_id, er.position, er.users_per_service_unit, r.ref, r.max_users, ty.capacity_mode';
+		$sql = 'SELECT er.resource_id, er.position, er.users_per_service_unit, r.ref, r.max_users, r.metric_value, ty.capacity_mode';
 		$sql .= ' FROM '.MAIN_DB_PREFIX.'element_resources er';
 		$sql .= ' INNER JOIN '.MAIN_DB_PREFIX.'resource r ON r.rowid=er.resource_id';
 		$sql .= ' LEFT JOIN '.MAIN_DB_PREFIX.'c_type_resource ty ON ty.code=r.fk_code_type_resource';
@@ -459,7 +496,7 @@ class ResourceReservationManager extends ResourceRequirementManager
 	 */
 	private function candidateHasCapacity($candidate, $required, array $reservation, array $planned)
 	{
-		$maximumCapacity = ($candidate->capacity_mode === 'users') ? (float) $candidate->max_users : 1.0;
+		$maximumCapacity = $this->getResourceMaximumCapacity($candidate);
 		if ($maximumCapacity <= 0 || $required > $maximumCapacity) {
 			return false;
 		}
@@ -490,5 +527,20 @@ class ResourceReservationManager extends ResourceRequirementManager
 	{
 		return (empty($left['date_end']) || empty($right['date_start']) || $right['date_start'] <= $left['date_end'])
 			&& (empty($right['date_end']) || empty($left['date_start']) || $right['date_end'] >= $left['date_start']);
+	}
+
+	/**
+	 * @param object $resource Resource capacity fields
+	 * @return float
+	 */
+	private function getResourceMaximumCapacity($resource)
+	{
+		if ($resource->capacity_mode === 'users') {
+			return (float) $resource->max_users;
+		}
+		if ($resource->capacity_mode === 'volume') {
+			return (float) $resource->metric_value;
+		}
+		return 1.0;
 	}
 }

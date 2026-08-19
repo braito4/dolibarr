@@ -151,15 +151,15 @@ class InterfaceResourceReservations extends DolibarrTriggers
 	private function fetchLine($elementType, $lineId)
 	{
 		if ($elementType === 'propaldet') {
-			$sql = 'SELECT d.rowid, d.fk_product, d.product_type, d.qty, d.date_start, d.date_end, p.duration as service_duration';
+			$sql = 'SELECT d.rowid, d.fk_propal as parent_id, d.fk_product, d.product_type, d.qty, d.date_start, d.date_end, p.duration as service_duration';
 			$sql .= ' FROM '.MAIN_DB_PREFIX.'propaldet d';
 			$sql .= ' LEFT JOIN '.MAIN_DB_PREFIX.'product p ON p.rowid = d.fk_product';
 		} elseif ($elementType === 'commandedet') {
-			$sql = 'SELECT d.rowid, d.fk_product, d.product_type, d.qty, d.date_start, d.date_end, p.duration as service_duration';
+			$sql = 'SELECT d.rowid, d.fk_commande as parent_id, d.fk_product, d.product_type, d.qty, d.date_start, d.date_end, p.duration as service_duration';
 			$sql .= ' FROM '.MAIN_DB_PREFIX.'commandedet d';
 			$sql .= ' LEFT JOIN '.MAIN_DB_PREFIX.'product p ON p.rowid = d.fk_product';
 		} else {
-			$sql = 'SELECT d.rowid, d.fk_product, d.product_type, d.qty,';
+			$sql = 'SELECT d.rowid, d.fk_contrat as parent_id, d.fk_product, d.product_type, d.qty,';
 			$sql .= ' d.date_ouverture_prevue as date_start, d.date_fin_validite as date_end, p.duration as service_duration, c.statut as parent_status';
 			$sql .= ' FROM '.MAIN_DB_PREFIX.'contratdet d';
 			$sql .= ' LEFT JOIN '.MAIN_DB_PREFIX.'product p ON p.rowid = d.fk_product';
@@ -206,7 +206,7 @@ class InterfaceResourceReservations extends DolibarrTriggers
 			return -1;
 		}
 
-		$sql = 'SELECT er.*, r.max_users, r.cooldown_minutes, ty.capacity_mode';
+		$sql = 'SELECT er.*, r.max_users, r.metric_value, r.cooldown_minutes, ty.capacity_mode';
 		$sql .= ' FROM '.MAIN_DB_PREFIX.'element_resources er';
 		$sql .= ' INNER JOIN '.MAIN_DB_PREFIX.'resource r ON r.rowid = er.resource_id';
 		$sql .= ' LEFT JOIN '.MAIN_DB_PREFIX.'c_type_resource ty ON ty.code = r.fk_code_type_resource';
@@ -274,14 +274,21 @@ class InterfaceResourceReservations extends DolibarrTriggers
 			$bulkAvailabilityLoaded = true;
 		}
 		foreach ($groups as $alternatives) {
+			if (!empty($alternatives[0]->selection_policy) && $alternatives[0]->selection_policy === 'smallest_sufficient') {
+				usort($alternatives, static function ($left, $right) {
+					return (float) $left->metric_value <=> (float) $right->metric_value;
+				});
+			}
 			$selected = null;
 			foreach ($alternatives as $preference) {
 				$perUnit = (float) $preference->users_per_service_unit;
-				$capacityUsed = abs((float) $line->qty) * $perUnit;
+				$capacityUsed = $this->calculateContextCapacityDemand($manager, $elementType, $line, $preference, $perUnit);
 				$dateStart = $commonStart;
 				$dateEnd = $commonEnd;
 				$cooldown = max(0, (int) $preference->cooldown_minutes);
-				$maximumCapacity = ($preference->capacity_mode === 'users') ? (float) $preference->max_users : 1.0;
+				$maximumCapacity = $preference->capacity_mode === 'users'
+					? (float) $preference->max_users
+					: ($preference->capacity_mode === 'volume' ? (float) $preference->metric_value : 1.0);
 				if (!empty($dateEnd) && $cooldown > 0) {
 					$dateEnd = $this->db->idate($this->db->jdate($dateEnd) + ($cooldown * 60));
 				}
@@ -324,7 +331,7 @@ class InterfaceResourceReservations extends DolibarrTriggers
 			// four places from a single room.
 			$splitAssignments = array();
 			$wholeQuantity = (int) abs((float) $line->qty);
-			if (!$selected && $wholeQuantity > 1 && (float) $wholeQuantity === abs((float) $line->qty)) {
+			if (!$selected && $wholeQuantity > 1 && (float) $wholeQuantity === abs((float) $line->qty) && $alternatives[0]->capacity_metrics !== 'volume') {
 				$stagedCapacity = array();
 				for ($unit = 0; $unit < $wholeQuantity; $unit++) {
 					$unitSelection = null;
@@ -397,6 +404,27 @@ class InterfaceResourceReservations extends DolibarrTriggers
 			$plannedCapacity[$capacityKey] = ($plannedCapacity[$capacityKey] ?? 0.0) + (float) $selected->capacity_used;
 		}
 		return 1;
+	}
+
+	/**
+	 * Calculate the demand represented by a service requirement.
+	 *
+	 * @param ResourceReservationManager $manager     Reservation manager
+	 * @param string                     $elementType Source line type
+	 * @param object                     $line        Normalized service line
+	 * @param object                     $preference  Requirement options
+	 * @param float                      $perUnit     Default capacity per service unit
+	 * @return float
+	 */
+	private function calculateContextCapacityDemand(ResourceReservationManager $manager, $elementType, $line, $preference, $perUnit)
+	{
+		if ($preference->context_scope === 'same_proposal'
+			&& $preference->demand_source === 'product_lines'
+			&& $preference->capacity_metrics === 'volume') {
+			return $manager->calculateDocumentProductVolume($elementType, (int) $line->parent_id);
+		}
+
+		return abs((float) $line->qty) * $perUnit;
 	}
 
 	/**

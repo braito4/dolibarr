@@ -94,7 +94,7 @@ ALTER TABLE llx_c_type_resource ADD COLUMN supports_cooldown smallint NOT NULL D
 ALTER TABLE llx_resource ADD COLUMN metric_value real DEFAULT NULL;
 ALTER TABLE llx_resource ADD COLUMN cooldown_minutes integer NOT NULL DEFAULT 0;
 UPDATE llx_c_type_resource SET capacity_mode = 'users' WHERE code = 'RES_ROOMS';
-UPDATE llx_c_type_resource SET capacity_mode = 'custom', metric_label = 'Usage value' WHERE code = 'RES_CARS';
+UPDATE llx_c_type_resource SET capacity_mode = 'volume', metric_label = 'Load volume', metric_unit = 'm3' WHERE code = 'RES_CARS';
 INSERT INTO llx_c_type_resource (code, label, capacity_mode, supports_cooldown, active) SELECT 'RES_MACHINES', 'Machinery', 'none', 1, 1 WHERE NOT EXISTS (SELECT 1 FROM llx_c_type_resource WHERE code = 'RES_MACHINES');
 
 -- Resource requirements attached to products and services
@@ -114,6 +114,10 @@ ALTER TABLE llx_element_resources ADD COLUMN end_input_mode varchar(16) NOT NULL
 ALTER TABLE llx_element_resources ADD COLUMN time_precision varchar(16) NOT NULL DEFAULT 'minute';
 ALTER TABLE llx_element_resources ADD COLUMN simultaneous smallint NOT NULL DEFAULT 1;
 ALTER TABLE llx_element_resources ADD COLUMN allow_split smallint NOT NULL DEFAULT 0;
+ALTER TABLE llx_element_resources ADD COLUMN context_scope varchar(16) NOT NULL DEFAULT 'service_line';
+ALTER TABLE llx_element_resources ADD COLUMN demand_source varchar(16) NOT NULL DEFAULT 'service_quantity';
+ALTER TABLE llx_element_resources ADD COLUMN capacity_metrics varchar(32) NOT NULL DEFAULT 'units';
+ALTER TABLE llx_element_resources ADD COLUMN selection_policy varchar(24) NOT NULL DEFAULT 'preference_order';
 UPDATE llx_element_resources SET requirement_group = 'legacy_default', mandatory = 1 WHERE element_type IN ('product', 'service');
 ALTER TABLE llx_element_resources ADD INDEX idx_element_resources_requirement (element_type, element_id, relation_kind, position);
 

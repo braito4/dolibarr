@@ -563,11 +563,40 @@ class ResourceReservationTest extends TestCase
 
 		$reloaded = new Dolresource($this->db);
 		$this->assertGreaterThan(0, $reloaded->fetch($this->firstResourceId));
-		$this->assertSame('custom', $reloaded->capacity_mode);
+		$this->assertSame('volume', $reloaded->capacity_mode);
 		$this->assertNull($reloaded->max_users);
 		$this->assertSame(0, $reloaded->allow_overflow);
 		$this->assertEquals(12500.5, $reloaded->metric_value);
 		$this->assertSame(0, $reloaded->cooldown_minutes);
+	}
+
+	/**
+	 * Product volumes from the same proposal are normalized and accumulated.
+	 *
+	 * @return void
+	 */
+	public function testProposalProductVolumeDemandIsAggregated(): void
+	{
+		$serviceLineId = $this->createProposalLine(1.0, '2026-10-10 08:00:00', '2026-10-11 08:00:00');
+		$sql = 'SELECT fk_propal FROM '.MAIN_DB_PREFIX.'propaldet WHERE rowid = '.((int) $serviceLineId);
+		$proposalId = (int) $this->db->fetch_object($this->db->query($sql))->fk_propal;
+		$productId = $this->insert('product', array(
+			'ref' => 'PHPUNIT_VOLUME_PRODUCT',
+			'label' => 'PHPUnit volume product',
+			'fk_product_type' => 0,
+			'volume' => 500,
+			'volume_units' => -3,
+			'entity' => 1,
+		));
+		$this->insert('propaldet', array(
+			'fk_propal' => $proposalId,
+			'fk_product' => $productId,
+			'product_type' => 0,
+			'qty' => 3,
+		));
+
+		$volume = (new ResourceReservationManager($this->db))->calculateDocumentProductVolume('propaldet', $proposalId);
+		$this->assertEquals(1.5, $volume);
 	}
 
 	/**

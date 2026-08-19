@@ -26,7 +26,7 @@
  * @var int $element_id
  * @var string $mode
  * @var string $resource_type
- * @var array<array{rowid:int,resource_id:int,resource_type:string,busy:int<0,1>,mandatory:int<0,1>,position:int,users_per_service_unit:float,relation_kind:string,resource_role:string,requirement_group:?string,quantity_required:float,duration_base:int,duration_per_unit:int,setup_duration:int,cleanup_duration:int,scheduling_mode:string,start_input_mode:string,end_input_mode:string,time_precision:string,simultaneous:int<0,1>,allow_split:int<0,1>}> $linked_resources
+ * @var array<array{rowid:int,resource_id:int,resource_type:string,busy:int<0,1>,mandatory:int<0,1>,position:int,users_per_service_unit:float,relation_kind:string,resource_role:string,requirement_group:?string,quantity_required:float,duration_base:int,duration_per_unit:int,setup_duration:int,cleanup_duration:int,scheduling_mode:string,start_input_mode:string,end_input_mode:string,time_precision:string,simultaneous:int<0,1>,allow_split:int<0,1>,context_scope:string,demand_source:string,capacity_metrics:string,selection_policy:string}> $linked_resources
  */
 // Protection to avoid direct call of template
 if (empty($conf) || !is_object($conf)) {
@@ -40,7 +40,7 @@ if (empty($conf) || !is_object($conf)) {
 @phan-var-force string $mode
 @phan-var-force string $resource_type
 @phan-var-force Translate $langs
-@phan-var-force array<array{rowid:int,resource_id:int,resource_type:string,busy:int<0,1>,mandatory:int<0,1>,position:int,users_per_service_unit:float,relation_kind:string,resource_role:string,requirement_group:?string,quantity_required:float,duration_base:int,duration_per_unit:int,setup_duration:int,cleanup_duration:int,scheduling_mode:string,start_input_mode:string,end_input_mode:string,time_precision:string,simultaneous:int<0,1>,allow_split:int<0,1>}> $linked_resources
+@phan-var-force array<array{rowid:int,resource_id:int,resource_type:string,busy:int<0,1>,mandatory:int<0,1>,position:int,users_per_service_unit:float,relation_kind:string,resource_role:string,requirement_group:?string,quantity_required:float,duration_base:int,duration_per_unit:int,setup_duration:int,cleanup_duration:int,scheduling_mode:string,start_input_mode:string,end_input_mode:string,time_precision:string,simultaneous:int<0,1>,allow_split:int<0,1>,context_scope:string,demand_source:string,capacity_metrics:string,selection_policy:string}> $linked_resources
 ';
 
 global $langs;
@@ -102,6 +102,10 @@ if ((array) $linked_resources && count($linked_resources) > 0) {
 				$startInputOptions = array('none' => $langs->trans('TimeInputNone'), 'date' => $langs->trans('TimeInputDate'), 'datetime' => $langs->trans('TimeInputDatetime'));
 				$endInputOptions = $startInputOptions + array('calculated' => $langs->trans('TimeInputCalculated'));
 				$precisionOptions = array('day' => $langs->trans('TimePrecisionDay'), 'hour' => $langs->trans('TimePrecisionHour'), 'minute' => $langs->trans('TimePrecisionMinute'), 'second' => $langs->trans('TimePrecisionSecond'));
+				$contextScopeOptions = array('service_line' => $langs->trans('CapacityContextServiceLine'), 'same_proposal' => $langs->trans('CapacityContextSameProposal'));
+				$demandSourceOptions = array('service_quantity' => $langs->trans('DemandSourceServiceQuantity'), 'product_lines' => $langs->trans('DemandSourceProductLines'));
+				$capacityMetricOptions = array('units' => $langs->trans('CapacityMetricUnits'), 'volume' => $langs->trans('CapacityMetricVolume'));
+				$selectionPolicyOptions = array('preference_order' => $langs->trans('SelectionPolicyPreferenceOrder'), 'smallest_sufficient' => $langs->trans('SelectionPolicySmallestSufficient'));
 				print '<div class="tagtd">';
 				print $resourceHelpLabel('ResourceRole').' '.$form->selectarray('resource_role', $roleOptions, $linked_resource['resource_role']).' ';
 				print $resourceHelpLabel('SchedulingMode').' '.$form->selectarray('scheduling_mode', $schedulingOptions, $linked_resource['scheduling_mode']).'<br>';
@@ -118,6 +122,12 @@ if ((array) $linked_resources && count($linked_resources) > 0) {
 				print '<label>'.$resourceHelpLabel('Mandatory').' <input type="checkbox" name="mandatory" value="1"'.($linked_resource['mandatory'] ? ' checked' : '').'></label> ';
 				print '<label>'.$resourceHelpLabel('SimultaneousRequirement').' <input type="checkbox" name="simultaneous" value="1"'.($linked_resource['simultaneous'] ? ' checked' : '').'></label> ';
 				print '<label>'.$resourceHelpLabel('AllowSplitRequirement').' <input type="checkbox" name="allow_split" value="1"'.($linked_resource['allow_split'] ? ' checked' : '').'></label>';
+				if ($object_resource instanceof Dolresource && $object_resource->capacity_mode === 'volume') {
+					print '<br>'.$resourceHelpLabel('CapacityContextScope').' '.$form->selectarray('context_scope', $contextScopeOptions, $linked_resource['context_scope']).' ';
+					print $resourceHelpLabel('CapacityDemandSource').' '.$form->selectarray('demand_source', $demandSourceOptions, $linked_resource['demand_source']).' ';
+					print $resourceHelpLabel('CapacityMetrics').' '.$form->selectarray('capacity_metrics', $capacityMetricOptions, $linked_resource['capacity_metrics']).' ';
+					print $resourceHelpLabel('ResourceSelectionPolicy').' '.$form->selectarray('selection_policy', $selectionPolicyOptions, $linked_resource['selection_policy']);
+				}
 				print '</div>';
 			} else {
 				print '<div class="tagtd center">'.$form->selectyesno('busy', $linked_resource['busy'] ? 1 : 0, 1).'</div>';
@@ -166,6 +176,12 @@ if ((array) $linked_resources && count($linked_resources) > 0) {
 				}
 				print ' · '.$langs->trans('Mandatory').': '.yn($linked_resource['mandatory']);
 				print ' · '.$langs->trans('SimultaneousRequirement').': '.yn($linked_resource['simultaneous']);
+				if ($object_resource instanceof Dolresource && $object_resource->capacity_mode === 'volume') {
+					print '<br>'.$langs->trans('CapacityContextScope').': '.$langs->trans($linked_resource['context_scope'] === 'same_proposal' ? 'CapacityContextSameProposal' : 'CapacityContextServiceLine');
+					print ' · '.$langs->trans('CapacityDemandSource').': '.$langs->trans($linked_resource['demand_source'] === 'product_lines' ? 'DemandSourceProductLines' : 'DemandSourceServiceQuantity');
+					print ' · '.$langs->trans('CapacityMetrics').': '.$langs->trans($linked_resource['capacity_metrics'] === 'volume' ? 'CapacityMetricVolume' : 'CapacityMetricUnits');
+					print ' · '.$langs->trans('ResourceSelectionPolicy').': '.$langs->trans($linked_resource['selection_policy'] === 'smallest_sufficient' ? 'SelectionPolicySmallestSufficient' : 'SelectionPolicyPreferenceOrder');
+				}
 				print ' · '.$langs->trans('DurationOfRange').': '.((int) $linked_resource['duration_base']).' + '.((int) $linked_resource['duration_per_unit']).' × '.$langs->trans('Unit');
 				if ($linked_resource['setup_duration'] || $linked_resource['cleanup_duration']) print ' · +'.((int) $linked_resource['setup_duration']).'/+'.((int) $linked_resource['cleanup_duration']).' min';
 				print '</div>';

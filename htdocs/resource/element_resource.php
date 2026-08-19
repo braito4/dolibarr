@@ -92,12 +92,20 @@ $end_input_mode         = GETPOST('end_input_mode', 'alpha') ?: 'none';
 $time_precision         = GETPOST('time_precision', 'alpha') ?: 'minute';
 $simultaneous           = GETPOSTINT('simultaneous');
 $allow_split            = GETPOSTINT('allow_split');
+$context_scope          = GETPOST('context_scope', 'alpha') ?: 'service_line';
+$demand_source          = GETPOST('demand_source', 'alpha') ?: 'service_quantity';
+$capacity_metrics       = GETPOST('capacity_metrics', 'alpha') ?: 'units';
+$selection_policy       = GETPOST('selection_policy', 'alpha') ?: 'preference_order';
 
 $allowedResourceRoles = array('capacity', 'production', 'delivery', 'equipment', 'operator');
 $allowedSchedulingModes = array('same_as_parent', 'fixed', 'next_available', 'within_window', 'manual');
 $allowedStartInputModes = array('none', 'date', 'datetime');
 $allowedEndInputModes = array('none', 'date', 'datetime', 'calculated');
 $allowedTimePrecisions = array('day', 'hour', 'minute', 'second');
+$allowedContextScopes = array('service_line', 'same_proposal');
+$allowedDemandSources = array('service_quantity', 'product_lines');
+$allowedCapacityMetrics = array('units', 'volume');
+$allowedSelectionPolicies = array('preference_order', 'smallest_sufficient');
 if (!in_array($resource_role, $allowedResourceRoles, true)) {
 	$resource_role = 'capacity';
 }
@@ -107,6 +115,10 @@ if (!in_array($scheduling_mode, $allowedSchedulingModes, true)) {
 if (!in_array($start_input_mode, $allowedStartInputModes, true)) $start_input_mode = 'none';
 if (!in_array($end_input_mode, $allowedEndInputModes, true)) $end_input_mode = 'none';
 if (!in_array($time_precision, $allowedTimePrecisions, true)) $time_precision = 'minute';
+if (!in_array($context_scope, $allowedContextScopes, true)) $context_scope = 'service_line';
+if (!in_array($demand_source, $allowedDemandSources, true)) $demand_source = 'service_quantity';
+if (!in_array($capacity_metrics, $allowedCapacityMetrics, true)) $capacity_metrics = 'units';
+if (!in_array($selection_policy, $allowedSelectionPolicies, true)) $selection_policy = 'preference_order';
 
 if (empty($mandatory)) {
 	$mandatory = 0;
@@ -289,6 +301,10 @@ if (empty($reshook)) {
 					'time_precision' => $time_precision,
 					'simultaneous' => $simultaneous,
 					'allow_split' => $allow_split,
+					'context_scope' => $context_scope,
+					'demand_source' => $demand_source,
+					'capacity_metrics' => $capacity_metrics,
+					'selection_policy' => $selection_policy,
 				);
 				$res = $objstat->add_element_resource($resource_id, $resource_type, $busy, $mandatory, 0, 0, $users_per_service_unit, $requirement);
 			}
@@ -328,6 +344,10 @@ if (empty($reshook)) {
 					$object->time_precision = $time_precision;
 					$object->simultaneous = $simultaneous;
 					$object->allow_split = $allow_split;
+					$object->context_scope = $context_scope;
+					$object->demand_source = $demand_source;
+					$object->capacity_metrics = $capacity_metrics;
+					$object->selection_policy = $selection_policy;
 				}
 			}
 
