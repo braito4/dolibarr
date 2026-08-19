@@ -586,6 +586,8 @@ class ResourceReservationTest extends TestCase
 			'fk_product_type' => 0,
 			'volume' => 500,
 			'volume_units' => -3,
+			'weight' => 250,
+			'weight_units' => 0,
 			'entity' => 1,
 		));
 		$this->insert('propaldet', array(
@@ -596,7 +598,74 @@ class ResourceReservationTest extends TestCase
 		));
 
 		$volume = (new ResourceReservationManager($this->db))->calculateDocumentProductVolume('propaldet', $proposalId);
+		$weight = (new ResourceReservationManager($this->db))->calculateDocumentProductWeight('propaldet', $proposalId);
 		$this->assertEquals(1.5, $volume);
+		$this->assertEquals(750.0, $weight);
+	}
+
+	/**
+	 * A unilateral supplier confirmation creates resource availability.
+	 *
+	 * @return void
+	 */
+	public function testUnilateralSupplierConfirmationCreatesAvailability(): void
+	{
+		global $user;
+		$sql = 'UPDATE '.MAIN_DB_PREFIX.'resource SET fk_statut = '.Dolresource::STATUS_UNKNOWN;
+		$sql .= ' WHERE rowid = '.((int) $this->firstResourceId);
+		$this->assertTrue((bool) $this->db->query($sql));
+		$manager = new ResourceSupplyRequestManager($this->db);
+		$requestId = $manager->create(array(
+			'fk_resource' => $this->firstResourceId,
+			'request_type' => 'supplier',
+			'quantity_requested' => 1,
+			'date_start' => '2026-12-01 08:00:00',
+			'date_end' => '2026-12-01 18:00:00',
+			'timezone' => 'Europe/Madrid',
+		), $user);
+		$this->assertGreaterThan(0, $requestId);
+		$this->assertSame(1, $manager->confirm($requestId, array(
+			'quantity_confirmed' => 1,
+			'date_start' => '2026-12-01 08:00:00',
+			'date_end' => '2026-12-01 18:00:00',
+		), $user));
+
+		$sql = 'SELECT request_status, demand_origin, fk_availability_slot FROM '.MAIN_DB_PREFIX.'resource_supply_request';
+		$sql .= ' WHERE rowid = '.((int) $requestId);
+		$request = $this->db->fetch_object($this->db->query($sql));
+		$this->assertSame(ResourceSupplyRequestManager::STATUS_CONFIRMED, $request->request_status);
+		$this->assertSame('unilateral', $request->demand_origin);
+		$this->assertGreaterThan(0, (int) $request->fk_availability_slot);
+	}
+
+	/**
+	 * Maintenance blocks only its calendar interval.
+	 *
+	 * @return void
+	 */
+	public function testMaintenanceCalendarBlocksResourceInterval(): void
+	{
+		$this->insert('resource_time_slot', array(
+			'entity' => 1,
+			'fk_resource' => $this->firstResourceId,
+			'label' => 'Inspection',
+			'slot_type' => 'absolute',
+			'availability_status' => 'inspection',
+			'date_start' => '2026-12-02 08:00:00',
+			'date_end' => '2026-12-02 10:00:00',
+			'active' => 1,
+		));
+		$manager = new ResourceReservationManager($this->db);
+		$slot = $manager->findNextAvailable(
+			'dolresource',
+			$this->firstResourceId,
+			$this->db->jdate('2026-12-02 08:00:00'),
+			$this->db->jdate('2026-12-02 12:00:00'),
+			60,
+			1.0,
+			6.0
+		);
+		$this->assertSame('2026-12-02 10:00:00', $slot['date_start']);
 	}
 
 	/**

@@ -44,15 +44,16 @@ class ResourceSupplyRequestManager
 		$dateStart = (string) ($request['date_start'] ?? '');
 		$dateEnd = (string) ($request['date_end'] ?? '');
 		$quantity = (float) ($request['quantity_requested'] ?? 0);
-		if ($assignmentId <= 0 || $resourceId <= 0 || $quantity <= 0 || $dateStart === '' || $dateEnd === '') {
+		if ($resourceId <= 0 || $quantity <= 0 || $dateStart === '' || $dateEnd === '') {
 			return -2;
 		}
 		$sql = 'INSERT INTO '.$this->db->prefix().'resource_supply_request (';
-		$sql .= 'entity, fk_element_resource, fk_resource, request_type, fk_soc_supplier, fk_product_supplier,';
+		$sql .= 'entity, fk_element_resource, fk_resource, request_type, demand_origin, fk_soc_supplier, fk_product_supplier,';
 		$sql .= ' quantity_requested, date_start, date_end, timezone, request_status, date_creation, fk_user_create';
 		$sql .= ') VALUES (';
-		$sql .= ((int) ($request['entity'] ?? 1)).', '.((int) $assignmentId).', '.((int) $resourceId).', ';
+		$sql .= ((int) ($request['entity'] ?? 1)).', '.($assignmentId > 0 ? ((int) $assignmentId) : 'NULL').', '.((int) $resourceId).', ';
 		$sql .= "'".$this->db->escape((string) ($request['request_type'] ?? 'owner'))."', ";
+		$sql .= "'".$this->db->escape($assignmentId > 0 ? 'customer' : 'unilateral')."', ";
 		$sql .= (!empty($request['fk_soc_supplier']) ? ((int) $request['fk_soc_supplier']) : 'NULL').', ';
 		$sql .= (!empty($request['fk_product_supplier']) ? ((int) $request['fk_product_supplier']) : 'NULL').', ';
 		$sql .= price2num($quantity, 'MS').", '".$this->db->escape($dateStart)."', '".$this->db->escape($dateEnd)."', ";
@@ -105,20 +106,36 @@ class ResourceSupplyRequestManager
 			$this->db->rollback();
 			return -2;
 		}
+		$sql = 'INSERT INTO '.$this->db->prefix().'resource_time_slot (entity, fk_resource, label, slot_type, availability_status, date_start, date_end, active, fk_user_create, date_creation) VALUES (';
+		$sql .= ((int) $request->entity).', '.((int) $request->fk_resource).", 'Supplier confirmed availability', 'absolute', 'available', '";
+		$sql .= $this->db->escape($dateStart)."', '".$this->db->escape($dateEnd)."', 1, ".((int) $user->id).", '".$this->db->idate(dol_now())."')";
+		if (!$this->db->query($sql)) {
+			$this->db->rollback();
+			return -1;
+		}
+		$availabilitySlotId = (int) $this->db->last_insert_id($this->db->prefix().'resource_time_slot');
 		$sql = 'UPDATE '.$this->db->prefix().'resource_supply_request SET request_status=\''.self::STATUS_CONFIRMED.'\',';
 		$sql .= ' quantity_confirmed='.price2num($quantity, 'MS').", date_confirmation='".$this->db->idate(dol_now())."',";
+		$sql .= ' fk_availability_slot='.((int) $availabilitySlotId).',';
 		$sql .= ' fk_user_modif='.((int) $user->id).' WHERE rowid='.((int) $requestId);
 		$resql = $this->db->query($sql);
 		if (!$resql || $this->db->affected_rows($resql) !== 1) {
 			$this->db->rollback();
 			return $resql ? -2 : -1;
 		}
-		$sql = 'UPDATE '.$this->db->prefix().'element_resources SET reservation_status=\'confirmed\'';
-		$sql .= ' WHERE rowid='.((int) $request->fk_element_resource)." AND reservation_status='awaiting_supply'";
-		$resql = $this->db->query($sql);
-		if (!$resql || $this->db->affected_rows($resql) !== 1) {
+		$sql = 'UPDATE '.$this->db->prefix().'resource SET fk_statut=1 WHERE rowid='.((int) $request->fk_resource);
+		if (!$this->db->query($sql)) {
 			$this->db->rollback();
-			return $resql ? -2 : -1;
+			return -1;
+		}
+		if (!empty($request->fk_element_resource)) {
+			$sql = 'UPDATE '.$this->db->prefix().'element_resources SET reservation_status=\'confirmed\'';
+			$sql .= ' WHERE rowid='.((int) $request->fk_element_resource)." AND reservation_status='awaiting_supply'";
+			$resql = $this->db->query($sql);
+			if (!$resql || $this->db->affected_rows($resql) !== 1) {
+				$this->db->rollback();
+				return $resql ? -2 : -1;
+			}
 		}
 		$this->db->commit();
 		return 1;
@@ -151,9 +168,24 @@ class ResourceSupplyRequestManager
 		$sql .= ' WHERE fk_supplier_order='.((int) $supplierOrderId);
 		if ($status === self::STATUS_REQUESTED) {
 			$sql .= " AND request_status IN ('".self::STATUS_UNKNOWN."','".self::STATUS_REQUESTED."')";
-		} else {
+		} elseif ($status !== self::STATUS_CANCELED) {
 			$sql .= " AND request_status<>'".self::STATUS_CONFIRMED."'";
 		}
-		return $this->db->query($sql) ? 1 : -1;
+		$this->db->begin();
+		if (!$this->db->query($sql)) {
+			$this->db->rollback();
+			return -1;
+		}
+		if ($status === self::STATUS_CANCELED) {
+			$sql = 'UPDATE '.$this->db->prefix().'resource_time_slot SET active=0 WHERE rowid IN (';
+			$sql .= 'SELECT fk_availability_slot FROM '.$this->db->prefix().'resource_supply_request';
+			$sql .= ' WHERE fk_supplier_order='.((int) $supplierOrderId).' AND fk_availability_slot IS NOT NULL)';
+			if (!$this->db->query($sql)) {
+				$this->db->rollback();
+				return -1;
+			}
+		}
+		$this->db->commit();
+		return 1;
 	}
 }

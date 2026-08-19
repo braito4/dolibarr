@@ -101,6 +101,40 @@ class ResourceReservationManager extends ResourceRequirementManager
 	}
 
 	/**
+	 * Calculate the payload weight of every product line in a document.
+	 *
+	 * @param string $elementType propaldet, commandedet or contratdet
+	 * @param int    $parentId    Proposal, order or contract id
+	 * @return float Weight in kilograms
+	 */
+	public function calculateDocumentProductWeight($elementType, $parentId)
+	{
+		if ($parentId <= 0) {
+			return 0.0;
+		}
+		if ($elementType === 'propaldet') {
+			$sql = 'SELECT d.qty, p.weight, p.weight_units FROM '.MAIN_DB_PREFIX.'propaldet d';
+			$sql .= ' INNER JOIN '.MAIN_DB_PREFIX.'product p ON p.rowid = d.fk_product WHERE d.fk_propal = '.((int) $parentId);
+		} elseif ($elementType === 'commandedet') {
+			$sql = 'SELECT d.qty, p.weight, p.weight_units FROM '.MAIN_DB_PREFIX.'commandedet d';
+			$sql .= ' INNER JOIN '.MAIN_DB_PREFIX.'product p ON p.rowid = d.fk_product WHERE d.fk_commande = '.((int) $parentId);
+		} elseif ($elementType === 'contratdet') {
+			$sql = 'SELECT d.qty, p.weight, p.weight_units FROM '.MAIN_DB_PREFIX.'contratdet d';
+			$sql .= ' INNER JOIN '.MAIN_DB_PREFIX.'product p ON p.rowid = d.fk_product WHERE d.fk_contrat = '.((int) $parentId);
+		} else {
+			return 0.0;
+		}
+		$sql .= ' AND d.product_type = 0';
+		$resql = $this->db->query($sql);
+		$totalWeight = 0.0;
+		while ($resql && ($productLine = $this->db->fetch_object($resql))) {
+			$unitFactor = (int) $productLine->weight_units < 50 ? pow(10, (int) $productLine->weight_units) : 1.0;
+			$totalWeight += abs((float) $productLine->qty) * (float) $productLine->weight * $unitFactor;
+		}
+		return $totalWeight;
+	}
+
+	/**
 	 * Find the first available interval for a resource.
 	 *
 	 * Resource time-slot rules are optional. With no rules, the resource is
@@ -122,7 +156,7 @@ class ResourceReservationManager extends ResourceRequirementManager
 		}
 		$rules = array();
 		if ($resourceType === 'dolresource') {
-			$sql = 'SELECT slot_type, date_start, date_end, weekday, time_start, time_end';
+			$sql = 'SELECT slot_type, availability_status, date_start, date_end, weekday, time_start, time_end';
 			$sql .= ' FROM '.MAIN_DB_PREFIX.'resource_time_slot';
 			$sql .= ' WHERE fk_resource = '.((int) $resourceId).' AND active = 1';
 			$resql = $this->db->query($sql);
@@ -171,7 +205,31 @@ class ResourceReservationManager extends ResourceRequirementManager
 		$date = dol_getdate($start);
 		$dayStart = dol_mktime(0, 0, 0, $date['mon'], $date['mday'], $date['year'], 'tzuserrel');
 		$weekday = (int) date('N', $start);
+		$hasAvailabilityRule = false;
 		foreach ($rules as $rule) {
+			$status = !empty($rule['availability_status']) ? $rule['availability_status'] : 'available';
+			if ($status === 'available') {
+				$hasAvailabilityRule = true;
+				continue;
+			}
+			if ($rule['slot_type'] === 'absolute') {
+				$ruleStart = $this->db->jdate($rule['date_start']);
+				$ruleEnd = $this->db->jdate($rule['date_end']);
+				if ($start < $ruleEnd && $end > $ruleStart) {
+					return false;
+				}
+			} elseif ($rule['slot_type'] === 'weekly' && (int) $rule['weekday'] === $weekday
+				&& $start < $dayStart + (int) $rule['time_end'] && $end > $dayStart + (int) $rule['time_start']) {
+				return false;
+			}
+		}
+		if (!$hasAvailabilityRule) {
+			return true;
+		}
+		foreach ($rules as $rule) {
+			if ((!empty($rule['availability_status']) ? $rule['availability_status'] : 'available') !== 'available') {
+				continue;
+			}
 			if ($rule['slot_type'] === 'absolute') {
 				$ruleStart = $this->db->jdate($rule['date_start']);
 				$ruleEnd = $this->db->jdate($rule['date_end']);

@@ -129,6 +129,8 @@ ALTER TABLE llx_bookcal_calendar ADD COLUMN timezone varchar(64) NOT NULL DEFAUL
 ALTER TABLE llx_element_resources ADD COLUMN service_quantity real DEFAULT NULL;
 ALTER TABLE llx_element_resources ADD COLUMN service_duration varchar(16) DEFAULT NULL;
 ALTER TABLE llx_element_resources ADD COLUMN capacity_used real DEFAULT NULL;
+ALTER TABLE llx_element_resources ADD COLUMN load_volume_used real DEFAULT NULL;
+ALTER TABLE llx_element_resources ADD COLUMN payload_weight_used real DEFAULT NULL;
 ALTER TABLE llx_element_resources ADD COLUMN date_start datetime DEFAULT NULL;
 ALTER TABLE llx_element_resources ADD COLUMN date_end datetime DEFAULT NULL;
 ALTER TABLE llx_element_resources ADD COLUMN reservation_status varchar(16) DEFAULT NULL;
@@ -142,6 +144,7 @@ CREATE TABLE llx_resource_time_slot
   fk_resource integer NOT NULL,
   label varchar(255) DEFAULT NULL,
   slot_type varchar(16) NOT NULL DEFAULT 'absolute',
+  availability_status varchar(16) NOT NULL DEFAULT 'available',
   date_start datetime DEFAULT NULL,
   date_end datetime DEFAULT NULL,
   weekday smallint DEFAULT NULL,
@@ -162,13 +165,15 @@ CREATE TABLE llx_resource_supply_request
 (
   rowid integer AUTO_INCREMENT PRIMARY KEY,
   entity integer DEFAULT 1 NOT NULL,
-  fk_element_resource integer NOT NULL,
+  fk_element_resource integer DEFAULT NULL,
   fk_resource integer NOT NULL,
   request_type varchar(16) NOT NULL DEFAULT 'owner',
   fk_soc_supplier integer DEFAULT NULL,
   fk_product_supplier integer DEFAULT NULL,
   fk_supplier_order integer DEFAULT NULL,
   fk_supplier_order_line integer DEFAULT NULL,
+  fk_availability_slot integer DEFAULT NULL,
+  demand_origin varchar(16) NOT NULL DEFAULT 'customer',
   quantity_requested real NOT NULL DEFAULT 1,
   quantity_confirmed real DEFAULT NULL,
   date_start datetime NOT NULL,
@@ -188,5 +193,6 @@ ALTER TABLE llx_resource_supply_request ADD UNIQUE INDEX uk_resource_supply_requ
 ALTER TABLE llx_resource_supply_request ADD INDEX idx_resource_supply_request_resource_dates (fk_resource, date_start, date_end);
 ALTER TABLE llx_resource_supply_request ADD INDEX idx_resource_supply_request_supplier_order (fk_supplier_order, fk_supplier_order_line);
 ALTER TABLE llx_resource_supply_request ADD INDEX idx_resource_supply_request_status (request_status);
+ALTER TABLE llx_resource_supply_request ADD INDEX idx_resource_supply_request_availability (fk_availability_slot);
 
 -- end of migration

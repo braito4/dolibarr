@@ -12,6 +12,7 @@ CREATE TABLE llx_resource_time_slot
   fk_resource       integer NOT NULL,
   label             varchar(255) DEFAULT NULL,
   slot_type         varchar(16) NOT NULL DEFAULT 'absolute',
+  availability_status varchar(16) NOT NULL DEFAULT 'available',
   date_start        datetime DEFAULT NULL,
   date_end          datetime DEFAULT NULL,
   weekday           smallint DEFAULT NULL,

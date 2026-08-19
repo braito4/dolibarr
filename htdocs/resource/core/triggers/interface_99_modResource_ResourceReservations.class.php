@@ -206,7 +206,7 @@ class InterfaceResourceReservations extends DolibarrTriggers
 			return -1;
 		}
 
-		$sql = 'SELECT er.*, r.max_users, r.metric_value, r.cooldown_minutes, ty.capacity_mode';
+		$sql = 'SELECT er.*, r.max_users, r.allow_overflow as resource_allow_overflow, r.metric_value, r.max_payload_weight, r.operational_location, r.cooldown_minutes, ty.capacity_mode';
 		$sql .= ' FROM '.MAIN_DB_PREFIX.'element_resources er';
 		$sql .= ' INNER JOIN '.MAIN_DB_PREFIX.'resource r ON r.rowid = er.resource_id';
 		$sql .= ' LEFT JOIN '.MAIN_DB_PREFIX.'c_type_resource ty ON ty.code = r.fk_code_type_resource';
@@ -283,6 +283,9 @@ class InterfaceResourceReservations extends DolibarrTriggers
 			foreach ($alternatives as $preference) {
 				$perUnit = (float) $preference->users_per_service_unit;
 				$capacityUsed = $this->calculateContextCapacityDemand($manager, $elementType, $line, $preference, $perUnit);
+				$payloadWeightUsed = $preference->capacity_metrics === 'volume_weight'
+					? $manager->calculateDocumentProductWeight($elementType, (int) $line->parent_id)
+					: 0.0;
 				$dateStart = $commonStart;
 				$dateEnd = $commonEnd;
 				$cooldown = max(0, (int) $preference->cooldown_minutes);
@@ -307,7 +310,10 @@ class InterfaceResourceReservations extends DolibarrTriggers
 				if ($needsAutomaticSlot && (empty($dateStart) || empty($dateEnd))) {
 					continue;
 				}
-				$fitsResourceCapacity = $capacityUsed > 0 && $capacityUsed <= $maximumCapacity;
+				$fitsPayload = $payloadWeightUsed <= 0 || (!empty($preference->max_payload_weight) && $payloadWeightUsed <= (float) $preference->max_payload_weight);
+				$fitsLocation = empty($preference->required_location)
+					|| strcasecmp(trim((string) $preference->required_location), trim((string) $preference->operational_location)) === 0;
+				$fitsResourceCapacity = $capacityUsed > 0 && $capacityUsed <= $maximumCapacity && $fitsPayload && $fitsLocation;
 				$capacityKey = ((int) $preference->resource_id).'|'.$dateStart.'|'.$dateEnd;
 				$occupied = 0.0;
 				if ($checkAvailability && !empty($dateStart) && !empty($dateEnd)) {
@@ -319,7 +325,9 @@ class InterfaceResourceReservations extends DolibarrTriggers
 				$canAllocate = !$checkAvailability ? $fitsResourceCapacity : ($fitsResourceCapacity && !empty($dateStart) && !empty($dateEnd) && ($occupied + $capacityUsed) <= $maximumCapacity);
 				if ($canAllocate) {
 					$selected = $preference;
-					$selected->capacity_used = $capacityUsed;
+					$selected->load_volume_used = $preference->capacity_mode === 'volume' ? $capacityUsed : 0.0;
+					$selected->capacity_used = $preference->capacity_mode === 'volume' ? $maximumCapacity : $capacityUsed;
+					$selected->payload_weight_used = $payloadWeightUsed;
 					$selected->assignment_start = $dateStart;
 					$selected->assignment_end = $dateEnd;
 					break;
@@ -330,8 +338,52 @@ class InterfaceResourceReservations extends DolibarrTriggers
 			// case: quantity 2 must reserve two rooms of capacity 2, not consume
 			// four places from a single room.
 			$splitAssignments = array();
+			if (!$selected && in_array($alternatives[0]->capacity_metrics, array('volume', 'volume_weight'), true)) {
+				$remainingVolume = $this->calculateContextCapacityDemand($manager, $elementType, $line, $alternatives[0], 1.0);
+				$remainingWeight = $alternatives[0]->capacity_metrics === 'volume_weight'
+					? $manager->calculateDocumentProductWeight($elementType, (int) $line->parent_id)
+					: 0.0;
+				foreach ($alternatives as $preference) {
+					if (empty($preference->resource_allow_overflow) || empty($commonStart) || empty($commonEnd)) {
+						continue;
+					}
+					if (!empty($preference->required_location)
+						&& strcasecmp(trim((string) $preference->required_location), trim((string) $preference->operational_location)) !== 0) {
+						continue;
+					}
+					$maximumVolume = (float) $preference->metric_value;
+					$maximumWeight = (float) $preference->max_payload_weight;
+					$volumeRatio = $remainingVolume > 0 ? min(1.0, $maximumVolume / $remainingVolume) : 0.0;
+					$weightRatio = $remainingWeight > 0 ? min(1.0, $maximumWeight / $remainingWeight) : 1.0;
+					$allocationRatio = min($volumeRatio, $weightRatio);
+					if ($allocationRatio <= 0) {
+						continue;
+					}
+					$occupied = $checkAvailability
+						? $manager->getOccupiedCapacityFromAssignments($confirmedAssignments, (int) $preference->resource_id, $commonStart, $commonEnd)
+						: 0.0;
+					if ($occupied > 0) {
+						continue;
+					}
+					$overflowSelection = clone $preference;
+					$overflowSelection->load_volume_used = $remainingVolume * $allocationRatio;
+					$overflowSelection->payload_weight_used = $remainingWeight * $allocationRatio;
+					$overflowSelection->capacity_used = $maximumVolume;
+					$overflowSelection->assignment_start = $commonStart;
+					$overflowSelection->assignment_end = $commonEnd;
+					$splitAssignments[] = $overflowSelection;
+					$remainingVolume -= $overflowSelection->load_volume_used;
+					$remainingWeight -= $overflowSelection->payload_weight_used;
+					if ($remainingVolume <= 0.000001 && $remainingWeight <= 0.000001) {
+						break;
+					}
+				}
+				if ($remainingVolume > 0.000001 || $remainingWeight > 0.000001) {
+					$splitAssignments = array();
+				}
+			}
 			$wholeQuantity = (int) abs((float) $line->qty);
-			if (!$selected && $wholeQuantity > 1 && (float) $wholeQuantity === abs((float) $line->qty) && $alternatives[0]->capacity_metrics !== 'volume') {
+			if (!$selected && empty($splitAssignments) && $wholeQuantity > 1 && (float) $wholeQuantity === abs((float) $line->qty) && !in_array($alternatives[0]->capacity_metrics, array('volume', 'volume_weight'), true)) {
 				$stagedCapacity = array();
 				for ($unit = 0; $unit < $wholeQuantity; $unit++) {
 					$unitSelection = null;
@@ -420,7 +472,7 @@ class InterfaceResourceReservations extends DolibarrTriggers
 	{
 		if ($preference->context_scope === 'same_proposal'
 			&& $preference->demand_source === 'product_lines'
-			&& $preference->capacity_metrics === 'volume') {
+			&& in_array($preference->capacity_metrics, array('volume', 'volume_weight'), true)) {
 			return $manager->calculateDocumentProductVolume($elementType, (int) $line->parent_id);
 		}
 
@@ -442,12 +494,14 @@ class InterfaceResourceReservations extends DolibarrTriggers
 	{
 		$sql = 'INSERT INTO '.MAIN_DB_PREFIX.'element_resources (';
 		$sql .= 'element_id, element_type, resource_id, resource_type, busy, mandatory, position, relation_kind, resource_role, requirement_group,';
-		$sql .= ' users_per_service_unit, service_quantity, service_duration, capacity_used, date_start, date_end, reservation_status, fk_user_create';
+		$sql .= ' users_per_service_unit, service_quantity, service_duration, capacity_used, load_volume_used, payload_weight_used, date_start, date_end, reservation_status, fk_user_create';
 		$sql .= ') VALUES (';
 		$sql .= ((int) $line->rowid).", '".$this->db->escape($elementType)."', ".((int) $selected->resource_id).", 'dolresource', 1, ".(!empty($selected->mandatory) ? 1 : 0).", ".((int) $selected->position).", 'assignment', '";
 		$sql .= $this->db->escape($selected->resource_role ?: 'capacity')."', ".(!empty($selected->requirement_group) ? "'".$this->db->escape($selected->requirement_group)."'" : 'NULL').', ';
 		$sql .= price2num($selected->users_per_service_unit, 'MS').', '.price2num($serviceQuantity, 'MS').', ';
 		$sql .= (!empty($line->service_duration) ? "'".$this->db->escape($line->service_duration)."'" : 'NULL').', '.price2num($selected->capacity_used, 'MS').', ';
+		$sql .= price2num(!empty($selected->load_volume_used) ? $selected->load_volume_used : 0, 'MS').', ';
+		$sql .= price2num(!empty($selected->payload_weight_used) ? $selected->payload_weight_used : 0, 'MS').', ';
 		$sql .= (!empty($selected->assignment_start) ? "'".$this->db->escape($selected->assignment_start)."'" : 'NULL').', ';
 		$sql .= (!empty($selected->assignment_end) ? "'".$this->db->escape($selected->assignment_end)."'" : 'NULL').", '".($isConfirmed ? 'confirmed' : 'provisional')."', ".((int) $user->id).')';
 		if (!$this->db->query($sql)) {
