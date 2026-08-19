@@ -978,7 +978,7 @@ class Dolresource extends CommonObject
 	 * @param	string		$element			Element
 	 * @param	int			$element_id			Id
 	 * @param	string		$resource_type		Type
-	 * @return	array<array{rowid:int,resource_id:int,resource_type:string,busy:int<0,1>,mandatory:int<0,1>,position:int,users_per_service_unit:float}>	Array of resources
+	 * @return	array<array{rowid:int,resource_id:int,resource_type:string,busy:int<0,1>,mandatory:int<0,1>,position:int,users_per_service_unit:float,relation_kind:string,resource_role:string,requirement_group:?string,quantity_required:float,duration_base:int,duration_per_unit:int,setup_duration:int,cleanup_duration:int,scheduling_mode:string,start_input_mode:string,end_input_mode:string,time_precision:string,simultaneous:int<0,1>,allow_split:int<0,1>}>	Array of resources
 	 */
 	public function getElementResources(string $element, int $element_id, string $resource_type = '')
 	{

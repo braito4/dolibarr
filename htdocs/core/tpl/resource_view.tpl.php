@@ -26,7 +26,7 @@
  * @var int $element_id
  * @var string $mode
  * @var string $resource_type
- * @var array<array{rowid:int,resource_id:int,resource_type:string,busy:int<0,1>,mandatory:int<0,1>}> $linked_resources
+ * @var array<array{rowid:int,resource_id:int,resource_type:string,busy:int<0,1>,mandatory:int<0,1>,position:int,users_per_service_unit:float,relation_kind:string,resource_role:string,requirement_group:?string,quantity_required:float,duration_base:int,duration_per_unit:int,setup_duration:int,cleanup_duration:int,scheduling_mode:string,start_input_mode:string,end_input_mode:string,time_precision:string,simultaneous:int<0,1>,allow_split:int<0,1>}> $linked_resources
  */
 // Protection to avoid direct call of template
 if (empty($conf) || !is_object($conf)) {
@@ -37,14 +37,16 @@ if (empty($conf) || !is_object($conf)) {
 '
 @phan-var-force string $element
 @phan-var-force int $element_id
+@phan-var-force string $mode
 @phan-var-force string $resource_type
-@phan-var-force array<array{rowid:int,resource_id:int,resource_type:string,busy:int<0,1>,mandatory:int<0,1>}> $linked_resources
+@phan-var-force Translate $langs
+@phan-var-force array<array{rowid:int,resource_id:int,resource_type:string,busy:int<0,1>,mandatory:int<0,1>,position:int,users_per_service_unit:float,relation_kind:string,resource_role:string,requirement_group:?string,quantity_required:float,duration_base:int,duration_per_unit:int,setup_duration:int,cleanup_duration:int,scheduling_mode:string,start_input_mode:string,end_input_mode:string,time_precision:string,simultaneous:int<0,1>,allow_split:int<0,1>}> $linked_resources
 ';
 
 
 $form = new Form($db);
 $isProductResourceList = ($element == 'product' || $element == 'service');
-$resourceHelpLabel = function ($labelKey) use ($form, $langs) {
+$resourceHelpLabel = function (string $labelKey) use ($form, $langs): string {
 	return $form->textwithpicto($langs->trans($labelKey), $langs->trans($labelKey.'Help'));
 };
 
