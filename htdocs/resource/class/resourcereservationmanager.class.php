@@ -920,6 +920,8 @@ class ResourceReservationManager extends ResourceRequirementManager
 	 */
 	public function previewOutOfService($resourceId)
 	{
+		$this->hasAvailabilityReadError = false;
+		$this->hasOperationReadError = false;
 		$reservations = $this->fetchAffectedReservations($resourceId);
 		if ($reservations === false) {
 			return false;
@@ -956,6 +958,8 @@ class ResourceReservationManager extends ResourceRequirementManager
 	public function applyOutOfService($resourceId, array $impact, ?User $actor = null)
 	{
 		global $langs;
+		$this->hasAvailabilityReadError = false;
+		$this->hasOperationReadError = false;
 		$langs->load('resource');
 		if ($actor === null && isset($GLOBALS['user']) && $GLOBALS['user'] instanceof User) {
 			$actor = $GLOBALS['user'];
@@ -963,12 +967,22 @@ class ResourceReservationManager extends ResourceRequirementManager
 		if (!$this->db->begin()) {
 			return -1;
 		}
-		if (!$this->lockResource((int) $resourceId) || !$this->lockAffectedAssignmentRows((int) $resourceId)) {
+		if (!$this->lockResource((int) $resourceId)) {
+			$this->db->rollback();
+			return -1;
+		}
+		$lockedAssignmentIds = $this->lockAffectedAssignmentRows((int) $resourceId);
+		if ($lockedAssignmentIds === false) {
 			$this->db->rollback();
 			return -1;
 		}
 		$reservations = $this->fetchAffectedReservations((int) $resourceId);
-		if ($reservations === false || !$this->lockReplacementResources($reservations)) {
+		if ($reservations === false || !$this->sameReservationIds($reservations, $lockedAssignmentIds)) {
+			$this->db->rollback();
+			return -1;
+		}
+		$lockedReplacementIds = $this->lockReplacementResources($reservations);
+		if ($lockedReplacementIds === false) {
 			$this->db->rollback();
 			return -1;
 		}
@@ -988,7 +1002,12 @@ class ResourceReservationManager extends ResourceRequirementManager
 		}
 		$planned = array();
 		foreach ($reservations as $reservation) {
-			$reservation['replacement'] = $this->findReplacement($reservation, $planned, true);
+			$reservation = $this->refreshLockedReservationLedger($reservation, (int) $resourceId);
+			if ($reservation === false) {
+				$this->db->rollback();
+				return -1;
+			}
+			$reservation['replacement'] = $this->findReplacement($reservation, $planned, true, $lockedReplacementIds);
 			if ($this->hasOperationReadError || $this->hasAvailabilityReadError) {
 				$this->db->rollback();
 				return -1;
@@ -1048,6 +1067,8 @@ class ResourceReservationManager extends ResourceRequirementManager
 	 */
 	public function replaceFailedAssignment($assignmentId)
 	{
+		$this->hasAvailabilityReadError = false;
+		$this->hasOperationReadError = false;
 		if (!$this->db->begin()) {
 			return -1;
 		}
@@ -1060,14 +1081,24 @@ class ResourceReservationManager extends ResourceRequirementManager
 			return $resql && !$assignment ? -2 : -1;
 		}
 		$lockSuffix = in_array($this->db->type, array('sqlite', 'sqlite3'), true) ? '' : ' FOR UPDATE';
-		$sql = 'SELECT rowid FROM '.MAIN_DB_PREFIX.'element_resources WHERE rowid='.((int) $assignmentId).$lockSuffix;
+		$sql = 'SELECT rowid, resource_id FROM '.MAIN_DB_PREFIX.'element_resources WHERE rowid='.((int) $assignmentId).$lockSuffix;
 		$lockedAssignment = $this->db->query($sql);
-		if (!$lockedAssignment || !$this->db->num_rows($lockedAssignment)) {
+		$currentAssignment = $lockedAssignment ? $this->db->fetch_object($lockedAssignment) : null;
+		if (!$lockedAssignment || !$currentAssignment) {
 			$this->db->rollback();
 			return -2;
 		}
+		if ((int) $currentAssignment->resource_id !== (int) $assignment->resource_id) {
+			$this->db->rollback();
+			return -1;
+		}
+		$lockedAssignmentIds = $this->lockAffectedAssignmentRows((int) $assignment->resource_id);
+		if ($lockedAssignmentIds === false || !in_array((int) $assignmentId, $lockedAssignmentIds, true)) {
+			$this->db->rollback();
+			return $lockedAssignmentIds === false ? -1 : -2;
+		}
 		$reservations = $this->fetchAffectedReservations((int) $assignment->resource_id);
-		if ($reservations === false) {
+		if ($reservations === false || !$this->sameReservationIds($reservations, $lockedAssignmentIds)) {
 			$this->db->rollback();
 			return -1;
 		}
@@ -1082,11 +1113,17 @@ class ResourceReservationManager extends ResourceRequirementManager
 			$this->db->rollback();
 			return -2;
 		}
-		if (!$this->lockReplacementResources(array($affected))) {
+		$affected = $this->refreshLockedReservationLedger($affected, (int) $assignment->resource_id);
+		if ($affected === false) {
 			$this->db->rollback();
 			return -1;
 		}
-		$affected['replacement'] = $this->findReplacement($affected, array(), true);
+		$lockedReplacementIds = $this->lockReplacementResources(array($affected));
+		if ($lockedReplacementIds === false) {
+			$this->db->rollback();
+			return -1;
+		}
+		$affected['replacement'] = $this->findReplacement($affected, array(), true, $lockedReplacementIds);
 		if ($this->hasOperationReadError || $this->hasAvailabilityReadError) {
 			$this->db->rollback();
 			return -1;
@@ -1134,23 +1171,43 @@ class ResourceReservationManager extends ResourceRequirementManager
 	 * Lock active assignment rows of a resource using a current read.
 	 *
 	 * @param int $resourceId Resource id
-	 * @return bool
+	 * @return array<int,int>|false Locked assignment ids, false on error
 	 */
 	private function lockAffectedAssignmentRows($resourceId)
 	{
 		$lockSuffix = in_array($this->db->type, array('sqlite', 'sqlite3'), true) ? '' : ' FOR UPDATE';
-		$sql = 'SELECT rowid FROM '.MAIN_DB_PREFIX.'element_resources';
-		$sql .= ' WHERE resource_id='.((int) $resourceId);
-		$sql .= " AND resource_type='dolresource' AND relation_kind='assignment'";
-		$sql .= " AND reservation_status NOT IN ('canceled','unavailable') ORDER BY rowid".$lockSuffix;
-		return (bool) $this->db->query($sql);
+		$now = $this->db->idate(dol_now());
+		$sql = 'SELECT er.rowid FROM '.MAIN_DB_PREFIX.'element_resources er';
+		$sql .= ' WHERE er.resource_id='.((int) $resourceId);
+		$sql .= " AND er.resource_type='dolresource' AND er.relation_kind='assignment'";
+		$sql .= " AND (er.date_end IS NULL OR er.date_end >= '".$this->db->escape($now)."')";
+		$sql .= ' AND (';
+		$sql .= "(er.element_type='propaldet' AND er.reservation_status NOT IN ('canceled','unavailable')";
+		$sql .= ' AND EXISTS (SELECT 1 FROM '.MAIN_DB_PREFIX.'propaldet pd INNER JOIN '.MAIN_DB_PREFIX.'propal p ON p.rowid=pd.fk_propal';
+		$sql .= ' WHERE pd.rowid=er.element_id AND p.entity IN ('.getEntity('propal').')))';
+		$sql .= " OR (er.element_type='commandedet' AND er.reservation_status='confirmed'";
+		$sql .= ' AND EXISTS (SELECT 1 FROM '.MAIN_DB_PREFIX.'commandedet od INNER JOIN '.MAIN_DB_PREFIX.'commande o ON o.rowid=od.fk_commande';
+		$sql .= ' WHERE od.rowid=er.element_id AND o.entity IN ('.getEntity('commande').')))';
+		$sql .= " OR (er.element_type='contratdet' AND er.reservation_status='confirmed'";
+		$sql .= ' AND EXISTS (SELECT 1 FROM '.MAIN_DB_PREFIX.'contratdet cd INNER JOIN '.MAIN_DB_PREFIX.'contrat c ON c.rowid=cd.fk_contrat';
+		$sql .= ' WHERE cd.rowid=er.element_id AND c.entity IN ('.getEntity('contract').')))';
+		$sql .= ') ORDER BY er.rowid'.$lockSuffix;
+		$resql = $this->db->query($sql);
+		if (!$resql) {
+			return false;
+		}
+		$ids = array();
+		while ($row = $this->db->fetch_object($resql)) {
+			$ids[] = (int) $row->rowid;
+		}
+		return $ids;
 	}
 
 	/**
 	 * Lock all alternatives that may receive the supplied reservations.
 	 *
 	 * @param array<int,array<string,mixed>> $reservations Reservations being moved
-	 * @return bool
+	 * @return array<int,int>|false Locked resource ids, false on error
 	 */
 	private function lockReplacementResources(array $reservations)
 	{
@@ -1166,14 +1223,67 @@ class ResourceReservationManager extends ResourceRequirementManager
 		}
 		$resourceIds = array_values(array_unique(array_filter($resourceIds)));
 		if (empty($resourceIds)) {
-			return true;
+			return array();
 		}
 		sort($resourceIds, SORT_NUMERIC);
 		$lockSuffix = in_array($this->db->type, array('sqlite', 'sqlite3'), true) ? '' : ' FOR UPDATE';
 		$sql = 'SELECT rowid FROM '.MAIN_DB_PREFIX.'resource';
 		$sql .= ' WHERE rowid IN ('.$this->db->sanitize(implode(',', $resourceIds)).')';
 		$sql .= ' AND entity IN ('.getEntity('resource').') ORDER BY rowid'.$lockSuffix;
-		return (bool) $this->db->query($sql);
+		$resql = $this->db->query($sql);
+		if (!$resql) {
+			return false;
+		}
+		$lockedIds = array();
+		while ($resource = $this->db->fetch_object($resql)) {
+			$lockedIds[] = (int) $resource->rowid;
+		}
+		return $lockedIds === $resourceIds ? $lockedIds : false;
+	}
+
+	/**
+	 * Verify that a current locking read and the enriched document query describe
+	 * the exact same assignment set.
+	 *
+	 * @param array<int,array<string,mixed>> $reservations Enriched reservations
+	 * @param array<int,int>                 $lockedIds    Current locked ids
+	 * @return bool
+	 */
+	private function sameReservationIds(array $reservations, array $lockedIds)
+	{
+		$reservationIds = array_map(static function ($reservation) {
+			return (int) $reservation['rowid'];
+		}, $reservations);
+		sort($reservationIds, SORT_NUMERIC);
+		sort($lockedIds, SORT_NUMERIC);
+		return $reservationIds === $lockedIds;
+	}
+
+	/**
+	 * Refresh ledger fields with a current locking read after the resource lock.
+	 * Document metadata remains available for matching and alert generation.
+	 *
+	 * @param array<string,mixed> $reservation Enriched reservation
+	 * @param int                 $resourceId  Expected current resource
+	 * @return array<string,mixed>|false
+	 */
+	private function refreshLockedReservationLedger(array $reservation, $resourceId)
+	{
+		$lockSuffix = in_array($this->db->type, array('sqlite', 'sqlite3'), true) ? '' : ' FOR UPDATE';
+		$sql = 'SELECT er.* FROM '.MAIN_DB_PREFIX.'element_resources er';
+		$sql .= ' WHERE er.rowid='.((int) $reservation['rowid']).' AND er.resource_id='.((int) $resourceId);
+		$sql .= " AND er.resource_type='dolresource' AND er.relation_kind='assignment'".$lockSuffix;
+		$resql = $this->db->query($sql);
+		$current = $resql ? $this->db->fetch_array($resql) : false;
+		if (!$resql || !$current) {
+			return false;
+		}
+		foreach ($current as $key => $value) {
+			if (is_string($key)) {
+				$reservation[$key] = $value;
+			}
+		}
+		return $reservation;
 	}
 
 	/**
@@ -1294,10 +1404,11 @@ class ResourceReservationManager extends ResourceRequirementManager
 	/**
 	 * @param array<string,mixed>              $reservation Reservation to replace
 	 * @param array<int,array<string,mixed>>   $planned     Planned replacements
-	 * @param bool                                $locking     Use a current locking read
+	 * @param bool                             $locking          Use a current locking read
+	 * @param array<int,int>|null              $lockedResourceIds Exact resource lock snapshot
 	 * @return array<string,mixed>|null
 	 */
-	private function findReplacement(array $reservation, array $planned, $locking = false)
+	private function findReplacement(array $reservation, array $planned, $locking = false, ?array $lockedResourceIds = null)
 	{
 		// A NULL group means an independent requirement, not an alternative set.
 		// Older assignments do not store a source requirement id, so substituting
@@ -1309,6 +1420,14 @@ class ResourceReservationManager extends ResourceRequirementManager
 		if ($candidates === false) {
 			$this->hasOperationReadError = true;
 			return null;
+		}
+		if ($locking && $lockedResourceIds !== null) {
+			foreach ($candidates as $candidate) {
+				if (!in_array((int) $candidate->resource_id, $lockedResourceIds, true)) {
+					$this->hasOperationReadError = true;
+					return null;
+				}
+			}
 		}
 		foreach ($candidates as $candidate) {
 			$replacement = $this->buildReplacement($candidate, $reservation);

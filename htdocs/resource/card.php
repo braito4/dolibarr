@@ -61,6 +61,7 @@ $description			= GETPOST('description', 'restricthtml');
 $phone					= GETPOST('phone', 'alpha');
 $email					= GETPOST('email', 'alpha');
 $max_users				= GETPOSTINT('max_users');
+$available_units		= GETPOSTISSET('available_units') ? max(1, GETPOSTINT('available_units')) : 1;
 $allow_overflow			= GETPOSTINT('allow_overflow');
 $metric_value			= GETPOST('metric_value', 'alpha');
 $max_payload_weight		= GETPOST('max_payload_weight', 'alpha');
@@ -145,6 +146,7 @@ if (empty($reshook)) {
 				$object->phone					= $phone;
 				$object->email					= $email;
 				$object->max_users				= $max_users;
+				$object->available_units			= $available_units;
 				$object->allow_overflow			= $allow_overflow ? 1 : 0;
 				$object->metric_value			= ($metric_value !== '' ? (float) price2num($metric_value, 'MS') : null);
 				$object->max_payload_weight		= ($max_payload_weight !== '' ? (float) price2num($max_payload_weight, 'MS') : null);
@@ -197,10 +199,16 @@ if (empty($reshook)) {
 		}
 
 		if (!$error) {
-			$res = $object->fetch($id);
+			$transactionStarted = (bool) $db->begin();
+			if (!$transactionStarted) {
+				setEventMessages($db->lasterror(), null, 'errors');
+				$error++;
+			}
+			$res = !$error ? $object->fetch($id) : -1;
 			if ($res > 0) {
 				$oldref = $object->ref;
 				$oldstatus = (int) $object->status;
+				$object->oldcopy = dol_clone($object, 2);
 
 				$object->ref          			= $ref;
 				$object->address				= $address;
@@ -212,6 +220,7 @@ if (empty($reshook)) {
 				$object->phone					= $phone;
 				$object->email					= $email;
 				$object->max_users				= $max_users;
+				$object->available_units			= $available_units;
 				$object->allow_overflow			= $allow_overflow ? 1 : 0;
 				$object->metric_value			= ($metric_value !== '' ? (float) price2num($metric_value, 'MS') : null);
 				$object->max_payload_weight		= ($max_payload_weight !== '' ? (float) price2num($max_payload_weight, 'MS') : null);
@@ -229,23 +238,35 @@ if (empty($reshook)) {
 
 				$result = !$error ? $object->update($user) : -1;
 				if ($result > 0) {
-					if ($oldref != $ref) {
-						// We renamed the ref so we must change the directory too
-						include_once DOL_DOCUMENT_ROOT.'/core/lib/files.lib.php';
-						$srcdir = $conf->resource->dir_output.'/'.dol_sanitizeFileName($oldref);
-						$destdir = $conf->resource->dir_output.'/'.dol_sanitizeFileName($ref);
-						dol_move_dir($srcdir, $destdir);
+					if (!$db->commit()) {
+						setEventMessages($db->lasterror(), null, 'errors');
+						$error++;
+					} else {
+						if ($object->out_of_service_impact_count !== null) {
+							setEventMessages($langs->trans('ResourceOutOfServiceImpactApplied', $object->out_of_service_impact_count), null);
+						}
+						if ($oldref != $ref) {
+							// Rename files only after the enclosing database transaction commits.
+							include_once DOL_DOCUMENT_ROOT.'/core/lib/files.lib.php';
+							$srcdir = $conf->resource->dir_output.'/'.dol_sanitizeFileName($oldref);
+							$destdir = $conf->resource->dir_output.'/'.dol_sanitizeFileName($ref);
+							dol_move_dir($srcdir, $destdir);
+						}
+						header("Location: ".$_SERVER['PHP_SELF']."?id=".$object->id);
+						exit;
 					}
-
-					header("Location: ".$_SERVER['PHP_SELF']."?id=".$object->id);
-					exit;
 				} else {
 					setEventMessages($object->error, $object->errors, 'errors');
 					$error++;
 				}
 			} else {
-				setEventMessages($object->error, $object->errors, 'errors');
-				$error++;
+				if (!$error) {
+					setEventMessages($object->error, $object->errors, 'errors');
+					$error++;
+				}
+			}
+			if ($error && $transactionStarted) {
+				$db->rollback();
 			}
 		}
 
@@ -425,6 +446,11 @@ if ($action == 'create' || $object->fetch($id, $ref) > 0) {
 		print '<input type="text" class="width75 right" name="max_users" id="max_users" value="'.(GETPOSTISSET('max_users') ? GETPOST('max_users', 'int') : ($object->max_users > 0 ? $object->max_users : '')).'"></td>';
 		print '</tr>';
 
+		// Number of interchangeable units represented by this resource
+		print '<tr><td>'.$form->editfieldkey('ResourceAvailableUnits', 'available_units', '', $object, 0, 'string', '', 0, 0, 'id', $langs->trans('ResourceAvailableUnitsHelp')).'</td>';
+		print '<td><input type="number" min="1" class="width75 right" name="available_units" id="available_units" value="'.(GETPOSTISSET('available_units') ? $available_units : max(1, (int) $object->available_units)).'"></td>';
+		print '</tr>';
+
 		print '<tr class="resource-model-overflow"><td>'.$form->editfieldkey('AllowResourceOverflow', 'allow_overflow', '', $object, 0, 'string', '', 0, 0, 'id', $langs->trans('AllowResourceOverflowHelp')).'</td>';
 		print '<td>'.$form->selectyesno('allow_overflow', GETPOSTISSET('allow_overflow') ? $allow_overflow : $object->allow_overflow, 1).'</td>';
 		print '</tr>';
@@ -499,6 +525,7 @@ if ($action == 'create' || $object->fetch($id, $ref) > 0) {
 		print '<td>'.$langs->trans('Status').'</td>';
 		print '<td>'.$object->getLibStatut(4).'</td>';
 		print '</tr>';
+		print '<tr><td>'.$langs->trans('ResourceAvailableUnits').'</td><td>'.max(1, (int) $object->available_units).'</td></tr>';
 
 		// Description
 		print '<tr>';

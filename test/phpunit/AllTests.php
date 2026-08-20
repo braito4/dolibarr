@@ -230,6 +230,9 @@ class AllTests
 		require_once dirname(__FILE__).'/ResourceAgendaReservationTest.php';
 		$suite->addTestSuite('ResourceAgendaReservationTest');
 
+		require_once dirname(__FILE__).'/ResourceLifecycleInvariantTest.php';
+		$suite->addTestSuite('ResourceLifecycleInvariantTest');
+
 		require_once dirname(__FILE__).'/WorkstationTest.php';
 		$suite->addTestSuite('WorkstationTest');
 

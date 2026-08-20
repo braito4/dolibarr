@@ -71,6 +71,11 @@ class Dolresource extends CommonObject
 	public $max_users;
 
 	/**
+	 * @var int Number of interchangeable physical units represented by this resource
+	 */
+	public $available_units = 1;
+
+	/**
 	 * @var int<0,1> Allow capacity exceeding a resource to spill over to the next preferred resource
 	 */
 	public $allow_overflow = 0;
@@ -90,6 +95,9 @@ class Dolresource extends CommonObject
 	public $metric_unit;
 	/** @var int<0,1> */
 	public $supports_cooldown = 0;
+
+	/** @var int|null Number of reservations processed by the latest out-of-service transition */
+	public $out_of_service_impact_count;
 
 	/**
 	 * @var string ID
@@ -287,6 +295,12 @@ class Dolresource extends CommonObject
 
 		$error = 0;
 		$this->date_creation = dol_now();
+		if ((int) $this->available_units < 1 || !in_array((int) $this->status, array_keys(self::getStatusArray()), true)
+			|| (!getDolGlobalInt('RESOURCE_ENABLE_UNKNOWN_AVAILABILITY') && (int) $this->status === self::STATUS_UNKNOWN)) {
+			$this->error = 'Invalid resource status or available units';
+			$this->errors[] = $this->error;
+			return -1;
+		}
 		if ($this->applyTypeCapabilities(true) < 0) {
 			return -1;
 		}
@@ -303,6 +317,7 @@ class Dolresource extends CommonObject
 			$this->phone,
 			$this->email,
 			$this->max_users,
+			max(1, (int) $this->available_units),
 			$this->allow_overflow,
 			$this->metric_value,
 			$this->max_payload_weight,
@@ -332,6 +347,7 @@ class Dolresource extends CommonObject
 		$sql .= "phone,";
 		$sql .= "email,";
 		$sql .= "max_users,";
+		$sql .= "available_units,";
 		$sql .= "allow_overflow,";
 		$sql .= "metric_value,";
 		$sql .= "max_payload_weight,";
@@ -347,14 +363,18 @@ class Dolresource extends CommonObject
 		$sql .= ") VALUES (";
 		$sql .= (int) (empty($this->entity) ? ((int) $conf->entity) : ((int) $this->entity)) . ", ";
 		foreach ($new_resource_values as $key => $value) {
-			// allow_overflow is NOT NULL and zero is a meaningful value.
-			if ($key === 10) {
-				$sql .= ' '.(!empty($value) ? 1 : 0).',';
+			if ($key === 9) {
+				$sql .= ' '.(isset($value) && $value !== '' ? (int) $value : 'NULL').',';
+			} elseif ($key === 10) {
+				$sql .= ' '.max(1, (int) $value).',';
+				// allow_overflow is NOT NULL and zero is a meaningful value.
 			} elseif ($key === 11) {
-				$sql .= ' '.(isset($value) && $value !== '' ? price2num($value, 'MS') : 'NULL').',';
+				$sql .= ' '.(!empty($value) ? 1 : 0).',';
 			} elseif ($key === 12) {
 				$sql .= ' '.(isset($value) && $value !== '' ? price2num($value, 'MS') : 'NULL').',';
-			} elseif ($key === 14) {
+			} elseif ($key === 13) {
+				$sql .= ' '.(isset($value) && $value !== '' ? price2num($value, 'MS') : 'NULL').',';
+			} elseif ($key === 15) {
 				$sql .= ' '.max(0, (int) $value).',';
 			} else {
 				$sql .= " " . (!empty($value) ? "'" . $this->db->escape($value) . "'" : 'NULL') . ",";
@@ -433,6 +453,7 @@ class Dolresource extends CommonObject
 		$sql .= " t.phone,";
 		$sql .= " t.email,";
 		$sql .= " t.max_users,";
+		$sql .= " t.available_units,";
 		$sql .= " t.allow_overflow,";
 		$sql .= " t.metric_value,";
 		$sql .= " t.max_payload_weight,";
@@ -473,6 +494,7 @@ class Dolresource extends CommonObject
 				$this->phone = $obj->phone;
 				$this->email = $obj->email;
 				$this->max_users = $obj->max_users;
+				$this->available_units = max(1, (int) $obj->available_units);
 				$this->allow_overflow = (int) $obj->allow_overflow;
 				$this->metric_value = isset($obj->metric_value) ? (float) $obj->metric_value : null;
 				$this->max_payload_weight = isset($obj->max_payload_weight) ? (float) $obj->max_payload_weight : null;
@@ -518,20 +540,34 @@ class Dolresource extends CommonObject
 		global $conf, $langs;
 		$error = 0;
 		$this->date_modification = dol_now();
-		$requireActiveType = true;
-		if ($this->id > 0) {
-			$sql = 'SELECT fk_code_type_resource FROM '.MAIN_DB_PREFIX.$this->table_element;
-			$sql .= ' WHERE rowid = '.((int) $this->id).' AND entity IN ('.getEntity('resource').')';
-			$resql = $this->db->query($sql);
-			$current = $resql ? $this->db->fetch_object($resql) : null;
-			if (!$resql || !$current) {
-				$this->error = !$resql ? $this->db->lasterror() : 'Resource not found in the current entity scope';
-				$this->errors[] = $this->error;
-				return -1;
-			}
-			$requireActiveType = (string) $current->fk_code_type_resource !== (string) $this->fk_code_type_resource;
+		$this->out_of_service_impact_count = null;
+
+		if ($this->id <= 0 || (int) $this->available_units < 1 || !in_array((int) $this->status, array_keys(self::getStatusArray()), true)
+			|| (!getDolGlobalInt('RESOURCE_ENABLE_UNKNOWN_AVAILABILITY') && (int) $this->status === self::STATUS_UNKNOWN)) {
+			$this->error = 'Invalid resource id, status or available units';
+			$this->errors[] = $this->error;
+			return -1;
 		}
+
+		$transactionWasOpen = $this->db->transaction_opened > 0;
+		if (!$this->db->begin()) {
+			$this->error = $this->db->lasterror();
+			return -1;
+		}
+		$lockSuffix = in_array($this->db->type, array('sqlite', 'sqlite3'), true) ? '' : ' FOR UPDATE';
+		$sql = 'SELECT ref, fk_statut, fk_code_type_resource FROM '.MAIN_DB_PREFIX.$this->table_element;
+		$sql .= ' WHERE rowid = '.((int) $this->id).' AND entity IN ('.getEntity('resource').')'.$lockSuffix;
+		$resql = $this->db->query($sql);
+		$current = $resql ? $this->db->fetch_object($resql) : null;
+		if (!$resql || !$current) {
+			$this->error = !$resql ? $this->db->lasterror() : 'Resource not found in the current entity scope';
+			$this->errors[] = $this->error;
+			$this->db->rollback();
+			return -1;
+		}
+		$requireActiveType = (string) $current->fk_code_type_resource !== (string) $this->fk_code_type_resource;
 		if ($this->applyTypeCapabilities($requireActiveType) < 0) {
+			$this->db->rollback();
 			return -1;
 		}
 
@@ -579,9 +615,34 @@ class Dolresource extends CommonObject
 			$this->note_private = trim($this->note_private);
 		}
 
-		// $this->oldcopy should have been set by the caller of update (here properties were already modified)
-		if (is_null($this->oldcopy) || (is_object($this->oldcopy) && $this->oldcopy->isEmpty())) {
-			$this->oldcopy = dol_clone($this, 2);
+		// Keep the locked database values for triggers and post-commit file handling.
+		if (!is_object($this->oldcopy)) {
+			$this->oldcopy = (object) array(
+				'ref' => $current->ref,
+				'status' => (int) $current->fk_statut,
+				'fk_code_type_resource' => $current->fk_code_type_resource,
+			);
+		}
+
+		require_once DOL_DOCUMENT_ROOT.'/resource/class/resourcereservationmanager.class.php';
+		$reservationManager = new ResourceReservationManager($this->db);
+		if ((int) $this->status === self::STATUS_OUT_OF_SERVICE && (int) $current->fk_statut !== self::STATUS_OUT_OF_SERVICE) {
+			$this->out_of_service_impact_count = $reservationManager->applyOutOfService((int) $this->id, array(), $user instanceof User ? $user : null);
+			if ($this->out_of_service_impact_count < 0) {
+				$this->error = $langs->trans('ResourceOutOfServiceImpactError');
+				$this->errors[] = $this->error;
+				$this->db->rollback();
+				return -1;
+			}
+		} elseif ((int) $this->status !== self::STATUS_OUT_OF_SERVICE) {
+			$capacityPerUnit = $reservationManager->getResourceMaximumCapacity($this);
+			$payloadPerUnit = $this->capacity_mode === 'volume' ? $this->max_payload_weight : null;
+			if (!$reservationManager->canResizeResource((int) $this->id, $capacityPerUnit, (int) $this->available_units, $payloadPerUnit)) {
+				$this->error = $langs->trans('ErrorResourceCapacityBelowReservations');
+				$this->errors[] = $this->error;
+				$this->db->rollback();
+				return -1;
+			}
 		}
 
 		// Update request
@@ -596,6 +657,7 @@ class Dolresource extends CommonObject
 		$sql .= " phone=".(isset($this->phone) ? "'".$this->db->escape($this->phone)."'" : "null").",";
 		$sql .= " email=".(isset($this->email) ? "'".$this->db->escape($this->email)."'" : "null").",";
 		$sql .= " max_users=".(isset($this->max_users) ? (int) $this->max_users : "null").",";
+		$sql .= " available_units=".max(1, (int) $this->available_units).",";
 		$sql .= " allow_overflow=".(!empty($this->allow_overflow) ? 1 : 0).",";
 		$sql .= " metric_value=".(isset($this->metric_value) ? price2num($this->metric_value, 'MS') : "null").",";
 		$sql .= " max_payload_weight=".(isset($this->max_payload_weight) ? price2num($this->max_payload_weight, 'MS') : "null").",";
@@ -608,9 +670,7 @@ class Dolresource extends CommonObject
 		$sql .= " note_private=".(isset($this->note_private) ? "'".$this->db->escape($this->note_private)."'" : "null").",";
 		$sql .= " tms=" . ("'" . $this->db->idate($this->date_modification) . "',");
 		$sql .= " fk_user_modif=" . (!empty($user->id) ? ((int) $user->id) : "null");
-		$sql .= " WHERE rowid=".((int) $this->id);
-
-		$this->db->begin();
+		$sql .= " WHERE rowid=".((int) $this->id).' AND entity IN ('.getEntity('resource').')';
 
 		dol_syslog(get_class($this)."::update", LOG_DEBUG);
 		$resql = $this->db->query($sql);
@@ -627,22 +687,6 @@ class Dolresource extends CommonObject
 					$error++;
 				}
 				// End call triggers
-			}
-		}
-
-		if (!$error && (is_object($this->oldcopy) && $this->oldcopy->ref !== $this->ref)) {
-			// We remove directory
-			if (!empty($conf->resource->dir_output)) {
-				$olddir = $conf->resource->dir_output."/".dol_sanitizeFileName($this->oldcopy->ref);
-				$newdir = $conf->resource->dir_output."/".dol_sanitizeFileName($this->ref);
-				if (file_exists($olddir)) {
-					$res = @rename($olddir, $newdir);
-					if (!$res) {
-						$langs->load("errors");
-						$this->error = $langs->trans('ErrorFailToRenameDir', $olddir, $newdir);
-						$error++;
-					}
-				}
 			}
 		}
 
@@ -663,7 +707,20 @@ class Dolresource extends CommonObject
 			$this->db->rollback();
 			return -1 * $error;
 		} else {
-			$this->db->commit();
+			if (!$this->db->commit()) {
+				$this->error = $this->db->lasterror();
+				return -1;
+			}
+			if (!$transactionWasOpen && (string) $current->ref !== (string) $this->ref && !empty($conf->resource->dir_output)) {
+				$olddir = $conf->resource->dir_output.'/'.dol_sanitizeFileName($current->ref);
+				$newdir = $conf->resource->dir_output.'/'.dol_sanitizeFileName($this->ref);
+				if (is_dir($olddir) && !@rename($olddir, $newdir)) {
+					$langs->load('errors');
+					$this->error = $langs->trans('ErrorFailToRenameDir', $olddir, $newdir);
+					$this->errors[] = $this->error;
+					return -1;
+				}
+			}
 			return 1;
 		}
 	}
@@ -772,32 +829,67 @@ class Dolresource extends CommonObject
 	 */
 	public function delete(User $user, int $notrigger = 0)
 	{
-		global $conf;
+		global $conf, $langs;
+		$langs->load('resource');
 
 		require_once DOL_DOCUMENT_ROOT.'/core/lib/files.lib.php';
 
-		$rowid = $this->id;
-
+		$rowid = (int) $this->id;
 		$error = 0;
+		$transactionWasOpen = $this->db->transaction_opened > 0;
+		if ($rowid <= 0 || !$this->db->begin()) {
+			$this->error = $rowid <= 0 ? 'Invalid resource id' : $this->db->lasterror();
+			return -1;
+		}
 
-		$this->db->begin();
+		$lockSuffix = in_array($this->db->type, array('sqlite', 'sqlite3'), true) ? '' : ' FOR UPDATE';
+		$sql = 'SELECT rowid FROM '.MAIN_DB_PREFIX.$this->table_element;
+		$sql .= ' WHERE rowid='.$rowid.' AND entity IN ('.getEntity('resource').')'.$lockSuffix;
+		$resql = $this->db->query($sql);
+		if (!$resql || $this->db->num_rows($resql) !== 1) {
+			$this->error = $resql ? 'Resource not found in the current entity scope' : $this->db->lasterror();
+			$this->db->rollback();
+			return -1;
+		}
 
-		$sql = "DELETE FROM ".MAIN_DB_PREFIX.$this->table_element;
-		$sql .= " WHERE rowid = ".((int) $rowid);
+		$now = $this->db->idate(dol_now());
+		$sql = 'SELECT rowid FROM '.MAIN_DB_PREFIX.'element_resources';
+		$sql .= ' WHERE resource_id='.$rowid." AND resource_type='dolresource'";
+		$sql .= " AND (relation_kind='assignment' OR relation_kind IS NULL)";
+		$sql .= " AND reservation_status IS NOT NULL AND reservation_status <> 'canceled'";
+		$sql .= " AND (date_end IS NULL OR date_end > '".$this->db->escape($now)."') ORDER BY rowid".$lockSuffix;
+		$resql = $this->db->query($sql);
+		if (!$resql || $this->db->num_rows($resql) > 0) {
+			$this->error = $resql ? $langs->trans('ErrorResourceHasActiveReservations') : $this->db->lasterror();
+			$this->db->rollback();
+			return -1;
+		}
 
-		dol_syslog(get_class($this), LOG_DEBUG);
-		if ($this->db->query($sql)) {
-			$sql = "DELETE FROM ".MAIN_DB_PREFIX."element_resources";
-			$sql .= " WHERE element_type='resource' AND resource_id = ".((int) $rowid);
-			dol_syslog(get_class($this)."::delete", LOG_DEBUG);
-			$resql = $this->db->query($sql);
-			if (!$resql) {
+		$sql = 'SELECT er.rowid FROM '.MAIN_DB_PREFIX.'element_resources er';
+		$sql .= ' INNER JOIN '.MAIN_DB_PREFIX.'actioncomm a ON a.id=er.element_id';
+		$sql .= ' WHERE er.resource_id='.$rowid." AND er.resource_type='dolresource'";
+		$sql .= " AND er.element_type='action' AND er.busy=1 AND er.reservation_status IS NULL";
+		$sql .= " AND (er.relation_kind='link' OR er.relation_kind IS NULL)";
+		$sql .= ' AND a.entity IN ('.getEntity('actioncomm').')';
+		$sql .= " AND COALESCE(a.datep2, a.datep) > '".$this->db->escape($now)."' ORDER BY er.rowid".$lockSuffix;
+		$resql = $this->db->query($sql);
+		if (!$resql || $this->db->num_rows($resql) > 0) {
+			$this->error = $resql ? $langs->trans('ErrorResourceHasActiveAgendaLinks') : $this->db->lasterror();
+			$this->db->rollback();
+			return -1;
+		}
+
+		$cleanupQueries = array(
+			"DELETE FROM ".MAIN_DB_PREFIX."resource_time_mask_assignment WHERE resource_type='dolresource' AND resource_id=".$rowid,
+			'DELETE FROM '.MAIN_DB_PREFIX.'resource_time_slot WHERE fk_resource='.$rowid,
+			"DELETE FROM ".MAIN_DB_PREFIX."element_resources WHERE resource_type='dolresource' AND resource_id=".$rowid,
+		);
+		foreach ($cleanupQueries as $cleanupSql) {
+			if (!$this->db->query($cleanupSql)) {
 				$this->error = $this->db->lasterror();
 				$error++;
+				break;
 			}
-		} else {
-			$this->error = $this->db->lasterror();
-			$error++;
 		}
 
 		// Removed extrafields
@@ -809,7 +901,17 @@ class Dolresource extends CommonObject
 			}
 		}
 
-		if (!$notrigger) {
+		if (!$error) {
+			$sql = 'DELETE FROM '.MAIN_DB_PREFIX.$this->table_element.' WHERE rowid='.$rowid;
+			$sql .= ' AND entity IN ('.getEntity('resource').')';
+			$resql = $this->db->query($sql);
+			if (!$resql || $this->db->affected_rows($resql) !== 1) {
+				$this->error = $this->db->lasterror() ?: 'Resource deletion did not affect the locked row';
+				$error++;
+			}
+		}
+
+		if (!$error && !$notrigger) {
 			// Call trigger
 			$result = $this->call_trigger('RESOURCE_DELETE', $user);
 			if ($result < 0) {
@@ -819,22 +921,16 @@ class Dolresource extends CommonObject
 		}
 
 		if (!$error) {
-			// We remove directory
-			dol_sanitizeFileName($this->ref);
-			if (!empty($conf->resource->dir_output)) {
-				$dir = $conf->resource->dir_output."/".dol_sanitizeFileName($this->ref);
-				if (file_exists($dir)) {
-					$res = @dol_delete_dir_recursive($dir);
-					if (!$res) {
-						$this->errors[] = 'ErrorFailToDeleteDir';
-						$error++;
-					}
+			if (!$this->db->commit()) {
+				$this->error = $this->db->lasterror();
+				return -1;
+			}
+			if (!$transactionWasOpen && !empty($conf->resource->dir_output)) {
+				$dir = $conf->resource->dir_output.'/'.dol_sanitizeFileName($this->ref);
+				if (is_dir($dir) && !@dol_delete_dir_recursive($dir)) {
+					$this->errors[] = 'ErrorFailToDeleteDir';
 				}
 			}
-		}
-
-		if (!$error) {
-			$this->db->commit();
 			return 1;
 		} else {
 			$this->db->rollback();
@@ -870,6 +966,7 @@ class Dolresource extends CommonObject
 		$sql .= " t.phone,";
 		$sql .= " t.email,";
 		$sql .= " t.max_users,";
+		$sql .= " t.available_units,";
 		$sql .= " t.allow_overflow,";
 		$sql .= " t.metric_value,";
 		$sql .= " t.max_payload_weight,";
@@ -941,6 +1038,7 @@ class Dolresource extends CommonObject
 					$line->phone = $obj->phone;
 					$line->email = $obj->email;
 					$line->max_users = $obj->max_users;
+					$line->available_units = max(1, (int) $obj->available_units);
 					$line->allow_overflow = (int) $obj->allow_overflow;
 					$line->metric_value = $obj->metric_value !== null ? (float) $obj->metric_value : null;
 					$line->max_payload_weight = $obj->max_payload_weight !== null ? (float) $obj->max_payload_weight : null;
@@ -1398,6 +1496,54 @@ class Dolresource extends CommonObject
 	public function getLibStatut(int $mode = 0)
 	{
 		return $this->getLibStatusLabel($this->status, $mode);
+	}
+
+	/**
+	 * Return whether a resource cannot accept another unit during an interval.
+	 *
+	 * Capacity and physical inventory are independent constraints: a pool may
+	 * still have spare seats but no interchangeable unit left to allocate.
+	 *
+	 * @param string $dateStart Database start date
+	 * @param string $dateEnd   Database end date
+	 * @return bool
+	 */
+	public function isBusy($dateStart, $dateEnd)
+	{
+		if ($this->id <= 0 || empty($dateStart) || empty($dateEnd) || $dateStart >= $dateEnd) {
+			return false;
+		}
+		if ((int) $this->status === self::STATUS_OUT_OF_SERVICE
+			|| ((int) $this->status === self::STATUS_UNKNOWN && !getDolGlobalInt('RESOURCE_ENABLE_UNKNOWN_AVAILABILITY'))) {
+			return true;
+		}
+		require_once DOL_DOCUMENT_ROOT.'/resource/class/resourcereservationmanager.class.php';
+		$manager = new ResourceReservationManager($this->db);
+		$availableUnits = max(1, (int) $this->available_units);
+		$maximumCapacity = $manager->getResourceMaximumCapacity($this) * $availableUnits;
+		if ($maximumCapacity <= 0 || !$manager->isAvailableInterval('dolresource', (int) $this->id, $dateStart, $dateEnd)) {
+			return true;
+		}
+		$occupiedCapacity = $manager->getOccupiedCapacity('dolresource', (int) $this->id, $dateStart, $dateEnd);
+		$occupiedUnits = $manager->getOccupiedResourceUnits('dolresource', (int) $this->id, $dateStart, $dateEnd);
+		return $occupiedCapacity >= $maximumCapacity || $occupiedUnits >= $availableUnits;
+	}
+
+	/**
+	 * Get the effective availability label for an interval.
+	 *
+	 * @param string   $dateStart Database start date
+	 * @param string   $dateEnd   Database end date
+	 * @param int<0,6> $mode      Status rendering mode
+	 * @return string
+	 */
+	public function getLibAvailabilityStatus($dateStart, $dateEnd, int $mode = 0)
+	{
+		$status = (int) $this->status;
+		if ($status === self::STATUS_FREE && $this->isBusy($dateStart, $dateEnd)) {
+			$status = self::STATUS_OCCUPIED;
+		}
+		return self::getLibStatusLabel($status, $mode);
 	}
 
 	/**
