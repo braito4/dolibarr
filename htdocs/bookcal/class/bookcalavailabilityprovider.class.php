@@ -8,6 +8,7 @@
  */
 
 require_once DOL_DOCUMENT_ROOT.'/resource/class/resourcereservationmanager.class.php';
+require_once DOL_DOCUMENT_ROOT.'/resource/class/resourcetimemaskprovider.class.php';
 
 /**
  * BookCal availability provider.
@@ -18,12 +19,15 @@ class BookCalAvailabilityProvider
 	private $db;
 	/** @var ResourceReservationManager */
 	private $manager;
+	/** @var ResourceTimeMaskProvider */
+	private $maskProvider;
 
 	/** @param DoliDB $db Database handler */
 	public function __construct($db)
 	{
 		$this->db = $db;
 		$this->manager = new ResourceReservationManager($db);
+		$this->maskProvider = new ResourceTimeMaskProvider($db);
 	}
 
 	/**
@@ -84,6 +88,14 @@ class BookCalAvailabilityProvider
 		$dayParts = dol_getdate($dayStart);
 		$dayKey = sprintf('%04d-%02d-%02d', $dayParts['year'], $dayParts['mon'], $dayParts['mday']);
 		$timezone = new DateTimeZone($this->getTimezone($calendarId));
+		if ($this->maskProvider->hasMask('bookcal_calendar', $calendarId)) {
+			$ranges = $this->maskProvider->getRangesForLocalDay('bookcal_calendar', $calendarId, $dayKey, $timezone->getName());
+			foreach ($ranges as $range) {
+				$this->appendRangeSlots($slots, $calendarId, $range['start'], $range['end'], $range['slot_duration'], $timezone);
+			}
+			ksort($slots);
+			return $slots;
+		}
 		$sql = 'SELECT ba.duration, ba.startHour, ba.endHour, ba.start, ba.end';
 		$sql .= ' FROM '.MAIN_DB_PREFIX.'bookcal_availabilities ba';
 		$sql .= ' INNER JOIN '.MAIN_DB_PREFIX.'bookcal_calendar bc ON bc.rowid = ba.fk_bookcal_calendar';
@@ -102,19 +114,7 @@ class BookCalAvailabilityProvider
 			if ($endHour <= $startHour) {
 				$closing = $closing->modify('+1 day');
 			}
-			$cursor = $opening->getTimestamp();
-			$limit = $closing->getTimestamp();
-			$duration = (int) $range->duration;
-			while ($cursor + ($duration * 60) <= $limit) {
-				$key = (new DateTimeImmutable('@'.$cursor))->setTimezone($timezone)->format('H:i');
-				if ($this->getUnambiguousLocalTimestamp($dayKey, $key, $timezone) !== $cursor) {
-					$cursor += $duration * 60;
-					continue;
-				}
-				$available = $this->isAvailable($calendarId, $cursor, $cursor + ($duration * 60));
-				$slots[$key] = $available ? $duration : -$duration;
-				$cursor += $duration * 60;
-			}
+			$this->appendRangeSlots($slots, $calendarId, $opening->getTimestamp(), $closing->getTimestamp(), (int) $range->duration, $timezone);
 		}
 		ksort($slots);
 		return $slots;
@@ -134,30 +134,40 @@ class BookCalAvailabilityProvider
 			return false;
 		}
 		$insideOpeningRange = false;
-		$sql = 'SELECT ba.duration, ba.startHour, ba.endHour, ba.start, ba.end';
-		$sql .= ' FROM '.MAIN_DB_PREFIX.'bookcal_availabilities ba';
-		$sql .= ' INNER JOIN '.MAIN_DB_PREFIX.'bookcal_calendar bc ON bc.rowid = ba.fk_bookcal_calendar';
-		$sql .= ' WHERE ba.fk_bookcal_calendar = '.((int) $calendarId).' AND ba.status = 1 AND bc.status = 1';
-		$resql = $this->db->query($sql);
 		$timezone = new DateTimeZone($this->getTimezone($calendarId));
 		$localDate = (new DateTimeImmutable('@'.$dateStart))->setTimezone($timezone);
 		$dayKey = $localDate->format('Y-m-d');
-		while ($resql && ($range = $this->db->fetch_object($resql))) {
-			$rangeStart = substr((string) $range->start, 0, 10);
-			$rangeEnd = substr((string) $range->end, 0, 10);
-			$startHour = max(0, min(24, (int) $range->startHour));
-			$endHour = max(0, min(24, (int) $range->endHour));
-			$openingDate = (new DateTimeImmutable($dayKey.' 00:00:00', $timezone))->setTime($startHour, 0);
-			$closingDate = (new DateTimeImmutable($dayKey.' 00:00:00', $timezone))->setTime($endHour, 0);
-			if ($endHour <= $startHour) {
-				$closingDate = $closingDate->modify('+1 day');
+		if ($this->maskProvider->hasMask('bookcal_calendar', $calendarId)) {
+			$ranges = $this->maskProvider->getRangesForLocalDay('bookcal_calendar', $calendarId, $dayKey, $timezone->getName());
+			foreach ($ranges as $range) {
+				$duration = (int) round(($dateEnd - $dateStart) / 60);
+				if ($dateStart >= $range['start'] && $dateEnd <= $range['end'] && $duration === $range['slot_duration']) {
+					$insideOpeningRange = true;
+					break;
+				}
 			}
-			$opening = $openingDate->getTimestamp();
-			$closing = $closingDate->getTimestamp();
-			$duration = (int) round(($dateEnd - $dateStart) / 60);
-			if ($dayKey >= $rangeStart && $dayKey <= $rangeEnd && $dateStart >= $opening && $dateEnd <= $closing && $duration === (int) $range->duration) {
-				$insideOpeningRange = true;
-				break;
+		} else {
+			$sql = 'SELECT ba.duration, ba.startHour, ba.endHour, ba.start, ba.end';
+			$sql .= ' FROM '.MAIN_DB_PREFIX.'bookcal_availabilities ba';
+			$sql .= ' INNER JOIN '.MAIN_DB_PREFIX.'bookcal_calendar bc ON bc.rowid = ba.fk_bookcal_calendar';
+			$sql .= ' WHERE ba.fk_bookcal_calendar = '.((int) $calendarId).' AND ba.status = 1 AND bc.status = 1';
+			$resql = $this->db->query($sql);
+			while ($resql && ($range = $this->db->fetch_object($resql))) {
+				$rangeStart = substr((string) $range->start, 0, 10);
+				$rangeEnd = substr((string) $range->end, 0, 10);
+				$startHour = max(0, min(24, (int) $range->startHour));
+				$endHour = max(0, min(24, (int) $range->endHour));
+				$openingDate = (new DateTimeImmutable($dayKey.' 00:00:00', $timezone))->setTime($startHour, 0);
+				$closingDate = (new DateTimeImmutable($dayKey.' 00:00:00', $timezone))->setTime($endHour, 0);
+				if ($endHour <= $startHour) {
+					$closingDate = $closingDate->modify('+1 day');
+				}
+				$duration = (int) round(($dateEnd - $dateStart) / 60);
+				if ($dayKey >= $rangeStart && $dayKey <= $rangeEnd && $dateStart >= $openingDate->getTimestamp()
+					&& $dateEnd <= $closingDate->getTimestamp() && $duration === (int) $range->duration) {
+					$insideOpeningRange = true;
+					break;
+				}
 			}
 		}
 		if (!$insideOpeningRange) {
@@ -258,6 +268,36 @@ class BookCalAvailabilityProvider
 		} catch (Exception $exception) {
 			$timezone = 'UTC';
 		}
-		return $timezone;
+		return $this->maskProvider->getTimezone('bookcal_calendar', $calendarId, $timezone);
+	}
+
+	/**
+	 * Expand one opening range into virtual slots.
+	 *
+	 * @param array<string,int> $slots      Generated slots
+	 * @param int               $calendarId Calendar id
+	 * @param int               $opening    Absolute opening timestamp
+	 * @param int               $closing    Absolute closing timestamp
+	 * @param int               $duration   Slot duration in minutes
+	 * @param DateTimeZone      $timezone   Calendar timezone
+	 * @return void
+	 */
+	private function appendRangeSlots(array &$slots, $calendarId, $opening, $closing, $duration, DateTimeZone $timezone)
+	{
+		if ($duration <= 0) {
+			return;
+		}
+		$cursor = $opening;
+		while ($cursor + ($duration * 60) <= $closing) {
+			$localDate = (new DateTimeImmutable('@'.$cursor))->setTimezone($timezone);
+			$key = $localDate->format('H:i');
+			if ($this->getUnambiguousLocalTimestamp($localDate->format('Y-m-d'), $key, $timezone) !== $cursor) {
+				$cursor += $duration * 60;
+				continue;
+			}
+			$available = $this->isAvailable($calendarId, $cursor, $cursor + ($duration * 60));
+			$slots[$key] = $available ? $duration : -$duration;
+			$cursor += $duration * 60;
+		}
 	}
 }

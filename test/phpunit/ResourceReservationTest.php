@@ -897,6 +897,188 @@ class ResourceReservationTest extends TestCase
 	}
 
 	/**
+	 * One office mask can constrain several resources without materialized slots.
+	 *
+	 * @return void
+	 */
+	public function testReusableOfficeMaskIsSharedByResources(): void
+	{
+		$maskId = $this->insert('resource_time_mask', array(
+			'entity' => 1,
+			'ref' => 'PHPUNIT-OFFICE-MASK',
+			'label' => 'PHPUnit office hours',
+			'timezone' => 'Europe/Madrid',
+			'active' => 1,
+		));
+		$this->insert('resource_time_mask_range', array(
+			'fk_time_mask' => $maskId,
+			'weekday_mask' => 31,
+			'start_day_offset' => 0,
+			'start_time' => 9 * 3600,
+			'end_day_offset' => 0,
+			'end_time' => 18 * 3600,
+			'slot_duration' => 30,
+			'active' => 1,
+		));
+		$maskProvider = new ResourceTimeMaskProvider($this->db);
+		foreach (array($this->firstResourceId, $this->secondResourceId) as $resourceId) {
+			$this->assertSame(1, $maskProvider->assignMask($maskId, 'dolresource', $resourceId));
+		}
+		$manager = new ResourceReservationManager($this->db);
+		$searchStart = (new DateTimeImmutable('2026-08-24 08:00:00', new DateTimeZone('Europe/Madrid')))->getTimestamp();
+		$searchEnd = (new DateTimeImmutable('2026-08-24 10:00:00', new DateTimeZone('Europe/Madrid')))->getTimestamp();
+		$expectedStart = (new DateTimeImmutable('2026-08-24 09:00:00', new DateTimeZone('Europe/Madrid')))->getTimestamp();
+		foreach (array($this->firstResourceId, $this->secondResourceId) as $resourceId) {
+			$slot = $manager->findNextAvailable(
+				'dolresource',
+				$resourceId,
+				$searchStart,
+				$searchEnd,
+				30,
+				1.0,
+				6.0
+			);
+			$this->assertSame($this->db->idate($expectedStart), $slot['date_start']);
+		}
+		$sql = 'SELECT COUNT(*) as nb FROM '.MAIN_DB_PREFIX.'resource_time_mask_range WHERE fk_time_mask = '.((int) $maskId);
+		$this->assertSame(1, (int) $this->db->fetch_object($this->db->query($sql))->nb);
+	}
+
+	/**
+	 * A hotel mask expands day zero at noon through day one at 11:59.
+	 *
+	 * @return void
+	 */
+	public function testReusableHotelMaskExpandsOvernightRange(): void
+	{
+		global $user;
+		$maskId = $this->insert('resource_time_mask', array(
+			'entity' => 1,
+			'ref' => 'PHPUNIT-HOTEL-MASK',
+			'label' => 'PHPUnit hotel night',
+			'timezone' => 'Europe/Madrid',
+			'active' => 1,
+		));
+		$this->insert('resource_time_mask_range', array(
+			'fk_time_mask' => $maskId,
+			'weekday_mask' => 127,
+			'start_day_offset' => 0,
+			'start_time' => 12 * 3600,
+			'end_day_offset' => 1,
+			'end_time' => (11 * 3600) + (59 * 60),
+			'slot_duration' => 1439,
+			'active' => 1,
+		));
+		$calendarIds = array();
+		$maskProvider = new ResourceTimeMaskProvider($this->db);
+		for ($index = 1; $index <= 2; $index++) {
+			$calendarId = $this->insert('bookcal_calendar', array(
+				'entity' => 1,
+				'ref' => 'PHPUNIT-HOTEL-ROOM-'.$index,
+				'label' => 'PHPUnit hotel room '.$index,
+				'timezone' => 'UTC',
+				'date_creation' => '2026-08-19 10:00:00',
+				'fk_user_creat' => $user->id,
+				'status' => 1,
+				'type' => 3,
+				'visibility' => 1,
+			));
+			$this->assertSame(1, $maskProvider->assignMask($maskId, 'bookcal_calendar', $calendarId));
+			$calendarIds[] = $calendarId;
+		}
+		$provider = new BookCalAvailabilityProvider($this->db);
+		foreach ($calendarIds as $calendarId) {
+			$this->assertSame(array('12:00' => 1439), $provider->getSlots($calendarId, gmmktime(0, 0, 0, 8, 24, 2026)));
+		}
+		$sql = 'SELECT COUNT(*) as nb FROM '.MAIN_DB_PREFIX.'resource_time_mask_range WHERE fk_time_mask = '.((int) $maskId);
+		$this->assertSame(1, (int) $this->db->fetch_object($this->db->query($sql))->nb);
+	}
+
+	/**
+	 * Assigning another mask replaces the resource assignment without duplication.
+	 *
+	 * @return void
+	 */
+	public function testAssignTimeMaskValidatesAndReplacesAssignment(): void
+	{
+		$firstMaskId = $this->insert('resource_time_mask', array(
+			'entity' => 1,
+			'ref' => 'PHPUNIT-MASK-FIRST',
+			'label' => 'PHPUnit first mask',
+			'active' => 1,
+		));
+		$secondMaskId = $this->insert('resource_time_mask', array(
+			'entity' => 1,
+			'ref' => 'PHPUNIT-MASK-SECOND',
+			'label' => 'PHPUnit second mask',
+			'active' => 1,
+		));
+		$provider = new ResourceTimeMaskProvider($this->db);
+
+		$this->assertSame(-1, $provider->assignMask(0, 'dolresource', $this->firstResourceId));
+		$this->assertSame(-1, $provider->assignMask($firstMaskId, 'invalid/type', $this->firstResourceId));
+		$this->assertSame(-1, $provider->assignMask($firstMaskId, 'dolresource', 0));
+		$this->assertSame(1, $provider->assignMask($firstMaskId, 'dolresource', $this->firstResourceId));
+		$this->assertSame($firstMaskId, (int) $provider->getMask('dolresource', $this->firstResourceId)->rowid);
+		$this->assertSame(1, $provider->assignMask($secondMaskId, 'dolresource', $this->firstResourceId));
+		$this->assertSame($secondMaskId, (int) $provider->getMask('dolresource', $this->firstResourceId)->rowid);
+
+		$sql = 'SELECT COUNT(*) as nb FROM '.MAIN_DB_PREFIX.'resource_time_mask_assignment';
+		$sql .= " WHERE resource_type = 'dolresource' AND resource_id = ".((int) $this->firstResourceId);
+		$this->assertSame(1, (int) $this->db->fetch_object($this->db->query($sql))->nb);
+	}
+
+	/**
+	 * Mask expansion applies weekdays and ignores inactive or incoherent ranges.
+	 *
+	 * @return void
+	 */
+	public function testTimeMaskExpansionFiltersRanges(): void
+	{
+		$maskId = $this->insert('resource_time_mask', array(
+			'entity' => 1,
+			'ref' => 'PHPUNIT-MASK-FILTERS',
+			'label' => 'PHPUnit filtered mask',
+			'timezone' => 'Europe/Madrid',
+			'active' => 1,
+		));
+		$this->insert('resource_time_mask_range', array(
+			'fk_time_mask' => $maskId,
+			'weekday_mask' => 1,
+			'start_time' => 9 * 3600,
+			'end_time' => 10 * 3600,
+			'slot_duration' => 30,
+			'active' => 1,
+		));
+		$this->insert('resource_time_mask_range', array(
+			'fk_time_mask' => $maskId,
+			'weekday_mask' => 127,
+			'start_time' => 12 * 3600,
+			'end_time' => 13 * 3600,
+			'slot_duration' => 30,
+			'active' => 0,
+		));
+		$this->insert('resource_time_mask_range', array(
+			'fk_time_mask' => $maskId,
+			'weekday_mask' => 127,
+			'start_time' => 15 * 3600,
+			'end_time' => 14 * 3600,
+			'slot_duration' => 30,
+			'active' => 1,
+		));
+		$provider = new ResourceTimeMaskProvider($this->db);
+		$this->assertSame(1, $provider->assignMask($maskId, 'dolresource', $this->firstResourceId));
+
+		$mondayRanges = $provider->getRangesForLocalDay('dolresource', $this->firstResourceId, '2026-08-24');
+		$sundayRanges = $provider->getRangesForLocalDay('dolresource', $this->firstResourceId, '2026-08-23');
+		$this->assertCount(1, $mondayRanges);
+		$this->assertSame(30, $mondayRanges[0]['slot_duration']);
+		$this->assertSame('2026-08-24 09:00', (new DateTimeImmutable('@'.$mondayRanges[0]['start']))->setTimezone(new DateTimeZone('Europe/Madrid'))->format('Y-m-d H:i'));
+		$this->assertSame('2026-08-24 10:00', (new DateTimeImmutable('@'.$mondayRanges[0]['end']))->setTimezone(new DateTimeZone('Europe/Madrid'))->format('Y-m-d H:i'));
+		$this->assertSame(array(), $sundayRanges);
+	}
+
+	/**
 	 * BookCal only offers sellable services linked to the selected calendar.
 	 *
 	 * @return void

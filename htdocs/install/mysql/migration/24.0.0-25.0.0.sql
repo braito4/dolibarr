@@ -163,4 +163,51 @@ ALTER TABLE llx_resource_time_slot ADD INDEX idx_resource_time_slot_resource (fk
 ALTER TABLE llx_resource_time_slot ADD INDEX idx_resource_time_slot_absolute (fk_resource, active, date_start, date_end);
 ALTER TABLE llx_resource_time_slot ADD INDEX idx_resource_time_slot_weekly (fk_resource, active, weekday, time_start, time_end);
 
+CREATE TABLE llx_resource_time_mask
+(
+  rowid integer AUTO_INCREMENT PRIMARY KEY,
+  entity integer DEFAULT 1 NOT NULL,
+  ref varchar(128) NOT NULL,
+  label varchar(255) NOT NULL,
+  timezone varchar(64) DEFAULT NULL,
+  active smallint NOT NULL DEFAULT 1,
+  fk_user_create integer DEFAULT NULL,
+  fk_user_modif integer DEFAULT NULL,
+  date_creation datetime DEFAULT NULL,
+  tms timestamp DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+) ENGINE=innodb;
+ALTER TABLE llx_resource_time_mask ADD UNIQUE INDEX uk_resource_time_mask_ref (entity, ref);
+ALTER TABLE llx_resource_time_mask ADD INDEX idx_resource_time_mask_active (entity, active);
+
+CREATE TABLE llx_resource_time_mask_range
+(
+  rowid integer AUTO_INCREMENT PRIMARY KEY,
+  fk_time_mask integer NOT NULL,
+  label varchar(255) DEFAULT NULL,
+  weekday_mask integer NOT NULL DEFAULT 127,
+  start_day_offset smallint NOT NULL DEFAULT 0,
+  start_time integer NOT NULL DEFAULT 0,
+  end_day_offset smallint NOT NULL DEFAULT 0,
+  end_time integer NOT NULL DEFAULT 86399,
+  slot_duration integer NOT NULL DEFAULT 15,
+  active smallint NOT NULL DEFAULT 1,
+  position integer NOT NULL DEFAULT 0,
+  tms timestamp DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+) ENGINE=innodb;
+ALTER TABLE llx_resource_time_mask_range ADD INDEX idx_resource_time_mask_range_mask (fk_time_mask, active, position);
+ALTER TABLE llx_resource_time_mask_range ADD CONSTRAINT fk_resource_time_mask_range_mask FOREIGN KEY (fk_time_mask) REFERENCES llx_resource_time_mask (rowid);
+
+CREATE TABLE llx_resource_time_mask_assignment
+(
+  rowid integer AUTO_INCREMENT PRIMARY KEY,
+  entity integer DEFAULT 1 NOT NULL,
+  fk_time_mask integer NOT NULL,
+  resource_type varchar(64) NOT NULL,
+  resource_id integer NOT NULL,
+  tms timestamp DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+) ENGINE=innodb;
+ALTER TABLE llx_resource_time_mask_assignment ADD UNIQUE INDEX uk_resource_time_mask_assignment_resource (entity, resource_type, resource_id);
+ALTER TABLE llx_resource_time_mask_assignment ADD INDEX idx_resource_time_mask_assignment_mask (fk_time_mask);
+ALTER TABLE llx_resource_time_mask_assignment ADD CONSTRAINT fk_resource_time_mask_assignment_mask FOREIGN KEY (fk_time_mask) REFERENCES llx_resource_time_mask (rowid);
+
 -- end of migration

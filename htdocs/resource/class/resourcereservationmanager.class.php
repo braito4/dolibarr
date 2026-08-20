@@ -2,6 +2,7 @@
 /* Copyright (C) 2026 Dolibarr contributors */
 
 require_once DOL_DOCUMENT_ROOT.'/resource/class/resourcerequirementmanager.class.php';
+require_once DOL_DOCUMENT_ROOT.'/resource/class/resourcetimemaskprovider.class.php';
 
 /**
  * \file resource/class/resourcereservationmanager.class.php
@@ -154,13 +155,19 @@ class ResourceReservationManager extends ResourceRequirementManager
 			return null;
 		}
 		$rules = array();
+		$maskProvider = new ResourceTimeMaskProvider($this->db);
+		$hasTimeMask = $maskProvider->hasMask($resourceType, $resourceId);
+		$maskRangesByDay = array();
+		$maskTimezone = $maskProvider->getTimezone($resourceType, $resourceId, 'UTC');
 		if ($resourceType === 'dolresource') {
-			$sql = 'SELECT slot_type, availability_status, date_start, date_end, weekday, time_start, time_end';
-			$sql .= ' FROM '.MAIN_DB_PREFIX.'resource_time_slot';
-			$sql .= ' WHERE fk_resource = '.((int) $resourceId).' AND active = 1';
-			$resql = $this->db->query($sql);
-			while ($resql && ($rule = $this->db->fetch_array($resql))) {
-				$rules[] = $rule;
+			if (!$hasTimeMask) {
+				$sql = 'SELECT slot_type, availability_status, date_start, date_end, weekday, time_start, time_end';
+				$sql .= ' FROM '.MAIN_DB_PREFIX.'resource_time_slot';
+				$sql .= ' WHERE fk_resource = '.((int) $resourceId).' AND active = 1';
+				$resql = $this->db->query($sql);
+				while ($resql && ($rule = $this->db->fetch_array($resql))) {
+					$rules[] = $rule;
+				}
 			}
 			if ($maximumCapacity === null) {
 				$sql = 'SELECT r.max_users, r.metric_value, r.fk_statut, ty.capacity_mode FROM '.MAIN_DB_PREFIX.'resource r';
@@ -182,12 +189,38 @@ class ResourceReservationManager extends ResourceRequirementManager
 		while ($cursor + $durationSeconds <= $latestEnd) {
 			$end = $cursor + $durationSeconds;
 			$occupied = $this->getOccupiedCapacityFromAssignments($assignments, $resourceId, $this->db->idate($cursor), $this->db->idate($end));
-			if ($this->matchesOpeningRule($cursor, $end, $rules) && ($occupied + $capacity) <= $maximumCapacity) {
+			$matchesCalendar = $this->matchesOpeningRule($cursor, $end, $rules);
+			if ($hasTimeMask) {
+				$dayKey = (new DateTimeImmutable('@'.$cursor))->setTimezone(new DateTimeZone($maskTimezone))->format('Y-m-d');
+				if (!isset($maskRangesByDay[$dayKey])) {
+					$maskRangesByDay[$dayKey] = $maskProvider->getRangesForLocalDay($resourceType, $resourceId, $dayKey, $maskTimezone);
+				}
+				$matchesCalendar = $this->matchesExpandedMaskRange($cursor, $end, $maskRangesByDay[$dayKey]);
+			}
+			if ($matchesCalendar && ($occupied + $capacity) <= $maximumCapacity) {
 				return array('date_start' => $this->db->idate($cursor), 'date_end' => $this->db->idate($end));
 			}
 			$cursor += 900;
 		}
 		return null;
+	}
+
+	/**
+	 * Check whether an interval is contained in an expanded reusable mask range.
+	 *
+	 * @param int                                             $start  Start timestamp
+	 * @param int                                             $end    End timestamp
+	 * @param array<int,array{start:int,end:int,slot_duration:int}> $ranges Expanded ranges
+	 * @return bool
+	 */
+	private function matchesExpandedMaskRange($start, $end, array $ranges)
+	{
+		foreach ($ranges as $range) {
+			if ($start >= $range['start'] && $end <= $range['end']) {
+				return true;
+			}
+		}
+		return false;
 	}
 
 	/**
