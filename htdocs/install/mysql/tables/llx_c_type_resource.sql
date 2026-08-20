@@ -31,5 +31,9 @@ create table llx_c_type_resource
   rowid      	integer AUTO_INCREMENT PRIMARY KEY,
   code          varchar(32) NOT NULL,
   label 	    varchar(128)	NOT NULL,
+	capacity_mode varchar(16) NOT NULL DEFAULT 'none',
+	metric_label varchar(128) DEFAULT NULL,
+	metric_unit varchar(32) DEFAULT NULL,
+	supports_cooldown smallint NOT NULL DEFAULT 0,
   active  	    tinyint DEFAULT 1  NOT NULL
 )ENGINE=innodb;
