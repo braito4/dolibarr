@@ -112,6 +112,7 @@ class Calendar extends CommonObject
 		'entity' => array('type' => 'integer', 'label' => 'Entity', 'default' => '1', 'enabled' => 1, 'visible' => -2, 'notnull' => 1, 'position' => 40, 'index' => 1),
 		'ref' => array('type' => 'varchar(128)', 'label' => 'Ref', 'enabled' => 1, 'position' => 20, 'notnull' => 1, 'visible' => 1, 'index' => 1, 'searchall' => 1, 'showoncombobox' => 1, 'validate' => 1, 'comment' => "Reference of object", 'css' => 'width100'),
 		'label' => array('type' => 'varchar(255)', 'label' => 'Label', 'enabled' => 1, 'position' => 30, 'notnull' => 0, 'visible' => 1, 'alwayseditable' => 1, 'searchall' => 1, 'css' => 'minwidth300', 'cssview' => 'wordbreak', 'help' => "Help text", 'showoncombobox' => 2, 'validate' => 1,),
+		'timezone' => array('type' => 'varchar(64)', 'label' => 'TimeZone', 'enabled' => 1, 'position' => 35, 'notnull' => 0, 'visible' => 1, 'default' => null, 'alwayseditable' => 1, 'css' => 'minwidth300', 'validate' => 1,),
 		'visibility' => array('type' => 'integer:User:user/class/user.class.php', 'label' => 'Owner', 'enabled' => 1, 'position' => 40, 'notnull' => 1, 'visible' => 1, 'picto' => 'user', 'css' => 'maxwidth500 widthcentpercentminusxx', 'csslist' => 'tdoverflowmax150',),
 		'type' => array('type' => 'integer', 'label' => 'Type', 'enabled' => 1, 'position' => 42, 'notnull' => 1, 'visible' => 1, 'arrayofkeyval' => array('0' => 'Customer', '1' => 'Supplier', '3' => 'Other'),),
 		'fk_soc' => array('type' => 'integer:Societe:societe/class/societe.class.php:1:((status:=:1) AND (entity:IN:__SHARED_ENTITIES__))', 'label' => 'ThirdParty', 'picto' => 'company', 'enabled' => 'isModEnabled("societe")', 'position' => 50, 'notnull' => -1, 'visible' => 1, 'index' => 1, 'css' => 'maxwidth500 widthcentpercentminusxx', 'csslist' => 'tdoverflowmax150', 'help' => "ThirdPartyBookCalHelp", 'validate' => 1,),
@@ -135,6 +136,10 @@ class Calendar extends CommonObject
 	 * @var string
 	 */
 	public $label;
+	/**
+	 * @var string IANA timezone of the resource location.
+	 */
+	public $timezone;
 	/**
 	 * @var int
 	 */
@@ -224,6 +229,9 @@ class Calendar extends CommonObject
 	 */
 	public function create(User $user, $notrigger = 0)
 	{
+		if ($this->normalizeTimezone() < 0) {
+			return -1;
+		}
 		$resultcreate = $this->createCommon($user, $notrigger);
 
 		//$resultvalidate = $this->validate($user, $notrigger);
@@ -427,7 +435,32 @@ class Calendar extends CommonObject
 	 */
 	public function update(User $user, $notrigger = 0)
 	{
+		if ($this->normalizeTimezone() < 0) {
+			return -1;
+		}
 		return $this->updateCommon($user, $notrigger);
+	}
+
+	/**
+	 * Normalize an optional IANA timezone without changing legacy calendars.
+	 *
+	 * @return int 1 on success, -1 on invalid input
+	 */
+	private function normalizeTimezone()
+	{
+		$this->timezone = trim((string) $this->timezone);
+		if ($this->timezone === '') {
+			$this->timezone = null;
+			return 1;
+		}
+		try {
+			$this->timezone = (new DateTimeZone($this->timezone))->getName();
+		} catch (Exception $exception) {
+			$this->error = 'Invalid calendar timezone';
+			$this->errors[] = $this->error;
+			return -1;
+		}
+		return 1;
 	}
 
 	/**
@@ -440,7 +473,6 @@ class Calendar extends CommonObject
 	public function delete(User $user, $notrigger = 0)
 	{
 		return $this->deleteCommon($user, $notrigger);
-		//return $this->deleteCommon($user, $notrigger, 1);
 	}
 
 	/**

@@ -849,7 +849,7 @@ class ResourceReservationManager extends ResourceRequirementManager
 		$resourceId = (int) $assignment['resource_id'];
 		$reservationStatus = !empty($assignment['reservation_status']) ? $assignment['reservation_status'] : self::STATUS_CONFIRMED;
 		if ((int) $assignment['element_id'] <= 0 || $resourceId <= 0
-			|| $resourceType !== 'dolresource'
+			|| !in_array($resourceType, array('dolresource', 'bookcal_calendar'), true)
 			|| !in_array($reservationStatus, array(self::STATUS_PROVISIONAL, self::STATUS_CONFIRMED), true)) {
 			return -1;
 		}
@@ -864,10 +864,34 @@ class ResourceReservationManager extends ResourceRequirementManager
 		if ($resourceType === 'dolresource') {
 			$lockSql = 'SELECT rowid FROM '.MAIN_DB_PREFIX.'resource WHERE rowid = '.((int) $resourceId);
 			$lockSql .= ' AND entity IN ('.getEntity('resource').')'.$lockSuffix;
+		} elseif ($resourceType === 'bookcal_calendar') {
+			$lockSql = 'SELECT rowid FROM '.MAIN_DB_PREFIX.'bookcal_calendar WHERE rowid = '.((int) $resourceId);
+			$lockSql .= ' AND status = 1 AND entity IN ('.getEntity('calendar', 0).')'.$lockSuffix;
 		}
 		if ($lockSql) {
 			$lockResult = $this->db->query($lockSql);
 			if (!$lockResult || !$this->db->num_rows($lockResult)) {
+				$this->db->rollback();
+				return -1;
+			}
+		}
+		if ($resourceType === 'bookcal_calendar' && $assignment['element_type'] === 'action') {
+			$sql = 'SELECT a.id FROM '.MAIN_DB_PREFIX.'actioncomm a';
+			$sql .= ' INNER JOIN '.MAIN_DB_PREFIX.'bookcal_calendar bc ON bc.rowid = '.((int) $resourceId).' AND bc.entity = a.entity';
+			$sql .= ' WHERE a.id = '.((int) $assignment['element_id']).' AND a.entity IN ('.getEntity('actioncomm').')';
+			$resql = $this->db->query($sql);
+			if (!$resql || !$this->db->num_rows($resql)) {
+				$this->db->rollback();
+				return -1;
+			}
+		}
+		if ($resourceType === 'bookcal_calendar') {
+			require_once DOL_DOCUMENT_ROOT.'/bookcal/class/bookcalavailabilityprovider.class.php';
+			$dateStartTimestamp = $this->db->jdate($assignment['date_start']);
+			$dateEndTimestamp = $this->db->jdate($assignment['date_end']);
+			$excludeActionId = $assignment['element_type'] === 'action' ? (int) $assignment['element_id'] : 0;
+			$provider = new BookCalAvailabilityProvider($this->db);
+			if (!$dateStartTimestamp || !$dateEndTimestamp || !$provider->isAvailable($resourceId, $dateStartTimestamp, $dateEndTimestamp, $excludeActionId)) {
 				$this->db->rollback();
 				return -1;
 			}

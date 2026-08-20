@@ -131,7 +131,7 @@ class modBookCal extends DolibarrModules
 		// A condition to hide module
 		$this->hidden = false;
 		// List of module class names as string that must be enabled if this module is enabled. Example: array('always'=>array('modModuleToEnable1','modModuleToEnable2'), 'FR'=>array('modModuleToEnableFR'...))
-		$this->depends = array();
+		$this->depends = array('modResource');
 		$this->requiredby = array(); // List of module class names as string to disable if this one is disabled. Example: array('modModuleToDisable1', ...)
 		$this->conflictwith = array(); // List of module class names as string this module is in conflict with. Example: array('modModuleToDisable1', ...)
 
@@ -459,6 +459,14 @@ class modBookCal extends DolibarrModules
 		$result = $this->_load_tables('/install/mysql/', 'bookcal');
 		if ($result < 0) {
 			return -1; // Do not activate module if error 'not allowed' returned when loading module SQL queries (the _load_table run sql with run_sql with the error allowed parameter set to 'default')
+		}
+		$tableName = MAIN_DB_PREFIX.'bookcal_calendar';
+		$fieldResult = $this->db->DDLDescTable($tableName, 'timezone');
+		if (!$fieldResult || $this->db->num_rows($fieldResult) === 0) {
+			$fieldDescription = array('type' => 'varchar', 'value' => '64', 'null' => 'NULL', 'default' => null);
+			if ($this->db->DDLAddField($tableName, 'timezone', $fieldDescription, 'after label') < 0) {
+				return -1;
+			}
 		}
 
 		// Permissions

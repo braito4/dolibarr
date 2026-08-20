@@ -46,13 +46,22 @@ class InterfaceResourceReservations extends DolibarrTriggers
 			return 0;
 		}
 		if ($action === 'ACTION_DELETE') {
+			if ($this->deleteSourceAssignments('action', (int) $object->id, 'bookcal_calendar') < 0) {
+				return -1;
+			}
 			return $this->deleteLegacyActionResourceLinks((int) $object->id);
 		}
 		if ($action === 'ACTION_ADD_RESOURCE') {
 			return $this->validateLegacyActionResources($object, false);
 		}
+		if ($action === 'ACTION_CREATE' && !empty($object->fk_bookcal_calendar)) {
+			return $this->synchronizeBookCalAction($object, $user);
+		}
 		if ($action === 'ACTION_MODIFY') {
-			return $this->validateLegacyActionResources($object, true);
+			if ($this->validateLegacyActionResources($object, true) < 0) {
+				return -1;
+			}
+			return $this->synchronizeBookCalAction($object, $user);
 		}
 
 		if (in_array($action, array('PROPAL_DELETE', 'PROPAL_CANCEL', 'PROPAL_CLOSE_REFUSED', 'PROPAL_CLOSE_SIGNED'), true)) {
@@ -117,6 +126,92 @@ class InterfaceResourceReservations extends DolibarrTriggers
 
 		$forceAvailability = ($isContract || $isOrder) && !empty($line->parent_status);
 		return $this->synchronizeLineReservation($elementType, $line, $user, $langs, null, $forceAvailability);
+	}
+
+	/**
+	 * Synchronize the reservation backing a BookCal action.
+	 *
+	 * @param CommonObject $object ActionComm object
+	 * @param User         $user   Acting user
+	 * @return int<-1,1>
+	 */
+	private function synchronizeBookCalAction($object, User $user)
+	{
+		$actionId = (int) $object->id;
+		if ($actionId <= 0) {
+			return -1;
+		}
+		$lockSuffix = in_array($this->db->type, array('sqlite', 'sqlite3'), true) ? '' : ' FOR UPDATE';
+		$sql = 'SELECT fk_bookcal_calendar, datep, datep2 FROM '.MAIN_DB_PREFIX.'actioncomm';
+		$sql .= ' WHERE id = '.$actionId.' AND entity IN ('.getEntity('actioncomm').')'.$lockSuffix;
+		$resql = $this->db->query($sql);
+		$storedAction = $resql ? $this->db->fetch_object($resql) : null;
+		if (!$resql || !$storedAction) {
+			$this->errors[] = $resql ? 'BookCal action not found in the current entity scope.' : $this->db->lasterror();
+			return -1;
+		}
+		$calendarId = (int) $storedAction->fk_bookcal_calendar;
+		$dateStartTimestamp = $this->db->jdate($storedAction->datep);
+		$dateEndTimestamp = $this->db->jdate($storedAction->datep2);
+		$dateStart = $dateStartTimestamp ? $this->db->idate($dateStartTimestamp) : '';
+		$dateEnd = $dateEndTimestamp ? $this->db->idate($dateEndTimestamp) : '';
+
+		$sql = 'SELECT resource_id, date_start, date_end, reservation_status FROM '.MAIN_DB_PREFIX.'element_resources';
+		$sql .= " WHERE element_type = 'action' AND element_id = ".$actionId;
+		$sql .= " AND resource_type = 'bookcal_calendar'";
+		$sql .= " AND (relation_kind = 'assignment' OR reservation_status IS NOT NULL) ORDER BY rowid";
+		$resql = $this->db->query($sql);
+		if (!$resql) {
+			$this->errors[] = $this->db->lasterror();
+			return -1;
+		}
+		$currentAssignmentCount = $this->db->num_rows($resql);
+		$currentAssignment = $this->db->fetch_object($resql);
+		if ($calendarId > 0 && $currentAssignmentCount === 1 && $currentAssignment
+			&& (int) $currentAssignment->resource_id === $calendarId
+			&& $currentAssignment->date_start === $dateStart
+			&& $currentAssignment->date_end === $dateEnd
+			&& $currentAssignment->reservation_status === ResourceReservationManager::STATUS_CONFIRMED) {
+			return 1;
+		}
+		if ($this->deleteSourceAssignments('action', $actionId, 'bookcal_calendar') < 0) {
+			return -1;
+		}
+		if ($calendarId <= 0) {
+			return 1;
+		}
+		if (empty($dateStart) || empty($dateEnd) || $dateStart >= $dateEnd) {
+			$this->errors[] = 'A BookCal action must have a valid start and end date.';
+			return -1;
+		}
+		if ($dateEndTimestamp <= dol_now()) {
+			return 1;
+		}
+		require_once DOL_DOCUMENT_ROOT.'/bookcal/class/bookcalavailabilityprovider.class.php';
+		$availabilityProvider = new BookCalAvailabilityProvider($this->db);
+		if (!$availabilityProvider->isAvailable($calendarId, $dateStartTimestamp, $dateEndTimestamp, $actionId)) {
+			$this->errors[] = 'The BookCal slot is outside opening hours or no longer available.';
+			return -1;
+		}
+
+		$manager = new ResourceReservationManager($this->db);
+		$result = $manager->createAssignment(array(
+			'element_type' => 'action',
+			'element_id' => $actionId,
+			'resource_type' => 'bookcal_calendar',
+			'resource_id' => $calendarId,
+			'resource_role' => 'capacity',
+			'capacity_used' => 1,
+			'maximum_capacity' => 1,
+			'date_start' => $dateStart,
+			'date_end' => $dateEnd,
+			'reservation_status' => ResourceReservationManager::STATUS_CONFIRMED,
+		), $user);
+		if ($result < 0) {
+			$this->errors[] = 'The BookCal slot is no longer available.';
+			return -1;
+		}
+		return 1;
 	}
 
 	/**
