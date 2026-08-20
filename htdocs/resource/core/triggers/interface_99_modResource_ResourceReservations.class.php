@@ -45,6 +45,15 @@ class InterfaceResourceReservations extends DolibarrTriggers
 		if (!isModEnabled('resource')) {
 			return 0;
 		}
+		if ($action === 'ACTION_DELETE') {
+			return $this->deleteLegacyActionResourceLinks((int) $object->id);
+		}
+		if ($action === 'ACTION_ADD_RESOURCE') {
+			return $this->validateLegacyActionResources($object, false);
+		}
+		if ($action === 'ACTION_MODIFY') {
+			return $this->validateLegacyActionResources($object, true);
+		}
 
 		if (in_array($action, array('PROPAL_DELETE', 'PROPAL_CANCEL', 'PROPAL_CLOSE_REFUSED', 'PROPAL_CLOSE_SIGNED'), true)) {
 			return $this->deleteDocumentReservations('propaldet', (int) $object->id);
@@ -108,6 +117,93 @@ class InterfaceResourceReservations extends DolibarrTriggers
 
 		$forceAvailability = ($isContract || $isOrder) && !empty($line->parent_status);
 		return $this->synchronizeLineReservation($elementType, $line, $user, $langs, null, $forceAvailability);
+	}
+
+	/**
+	 * Revalidate physical Agenda links when an event is moved or resized.
+	 *
+	 * @param CommonObject $object                ActionComm object
+	 * @param bool         $onlyIfIntervalChanged Skip metadata-only updates when oldcopy is available
+	 * @return int<-1,1>
+	 */
+	private function validateLegacyActionResources($object, $onlyIfIntervalChanged = false)
+	{
+		$actionId = (int) $object->id;
+		if ($actionId <= 0 || !getDolGlobalString('RESOURCE_USED_IN_EVENT_CHECK')) {
+			return 1;
+		}
+		if ($onlyIfIntervalChanged && !empty($object->oldcopy)
+			&& (int) $object->oldcopy->datep === (int) $object->datep
+			&& (int) $object->oldcopy->datef === (int) $object->datef
+			&& (int) $object->oldcopy->fulldayevent === (int) $object->fulldayevent) {
+			return 1;
+		}
+		$dateStartTimestamp = !empty($object->datep) ? (int) $object->datep : 0;
+		$dateEndTimestamp = !empty($object->datef) ? (int) $object->datef : 0;
+		if ($dateStartTimestamp <= 0) {
+			return 1;
+		}
+		if ($dateEndTimestamp <= 0) {
+			if (!empty($object->fulldayevent)) {
+				$startParts = dol_getdate($dateStartTimestamp);
+				$dateStartTimestamp = dol_mktime(0, 0, 0, $startParts['mon'], $startParts['mday'], $startParts['year']);
+				$dateEndTimestamp = dol_mktime(0, 0, 0, $startParts['mon'], $startParts['mday'] + 1, $startParts['year']);
+			} else {
+				$dateEndTimestamp = $dateStartTimestamp + 1;
+			}
+		}
+		if ($dateEndTimestamp <= dol_now() || $dateEndTimestamp <= $dateStartTimestamp) {
+			return 1;
+		}
+
+		$sql = 'SELECT DISTINCT resource_id FROM '.MAIN_DB_PREFIX.'element_resources';
+		$sql .= " WHERE element_type = 'action' AND element_id = ".$actionId;
+		$sql .= " AND resource_type = 'dolresource' AND busy = 1";
+		$sql .= " AND (relation_kind = 'link' OR relation_kind IS NULL) AND reservation_status IS NULL";
+		$sql .= ' ORDER BY resource_id';
+		$resql = $this->db->query($sql);
+		if (!$resql) {
+			$this->errors[] = $this->db->lasterror();
+			return -1;
+		}
+		$resourceIds = array();
+		while ($row = $this->db->fetch_object($resql)) {
+			$resourceIds[] = (int) $row->resource_id;
+		}
+		$resourceIds = array_values(array_unique(array_filter($resourceIds)));
+		if (empty($resourceIds)) {
+			return 1;
+		}
+		sort($resourceIds, SORT_NUMERIC);
+		$manager = new ResourceReservationManager($this->db);
+		$dateStart = $this->db->idate($dateStartTimestamp);
+		$dateEnd = $this->db->idate($dateEndTimestamp);
+		foreach ($resourceIds as $resourceId) {
+			if (!$manager->canReserveExclusiveAction($resourceId, $actionId, $dateStart, $dateEnd)) {
+				$this->errors[] = 'A linked resource is unavailable for the new Agenda interval.';
+				return -1;
+			}
+		}
+		return 1;
+	}
+
+	/**
+	 * Delete generic resource links owned by an Agenda action being removed.
+	 *
+	 * @param int $actionId Action id
+	 * @return int<-1,1>
+	 */
+	private function deleteLegacyActionResourceLinks($actionId)
+	{
+		$sql = 'DELETE FROM '.MAIN_DB_PREFIX.'element_resources';
+		$sql .= " WHERE element_type = 'action' AND element_id = ".((int) $actionId);
+		$sql .= " AND resource_type = 'dolresource'";
+		$sql .= " AND (relation_kind IS NULL OR relation_kind = 'link') AND reservation_status IS NULL";
+		if (!$this->db->query($sql)) {
+			$this->errors[] = $this->db->lasterror();
+			return -1;
+		}
+		return 1;
 	}
 
 	/**

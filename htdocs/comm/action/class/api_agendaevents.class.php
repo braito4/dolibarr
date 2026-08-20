@@ -323,7 +323,7 @@ class AgendaEvents extends DolibarrApi
 			$this->actioncomm->$field = $this->_checkValForAPI($field, $value, $this->actioncomm);
 		}
 
-		if ($this->actioncomm->update(DolibarrApiAccess::$user, 1) > 0) {
+		if ($this->actioncomm->update(DolibarrApiAccess::$user) > 0) {
 			return $this->get($id);
 		}
 

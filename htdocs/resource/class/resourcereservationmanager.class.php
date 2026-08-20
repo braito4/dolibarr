@@ -628,13 +628,17 @@ class ResourceReservationManager extends ResourceRequirementManager
 			return $conflicts;
 		}
 
-		// Do not lock actioncomm here: ActionComm::update() already holds the action
-		// row before it locks resources. Locking both in the opposite order would
-		// create a deadlock. A concurrent move is revalidated by ACTION_MODIFY after
-		// it obtains the resource lock.
 		$sql = 'SELECT id, datep, datep2, fulldayevent FROM '.MAIN_DB_PREFIX.'actioncomm';
 		$sql .= ' WHERE id IN ('.implode(',', array_keys($resourcesByAction)).')';
 		$sql .= ' AND entity IN ('.getEntity('actioncomm').')';
+		$sql .= ' ORDER BY id';
+		if ($locking && !in_array($this->db->type, array('sqlite', 'sqlite3'), true)) {
+			// A locking read is required under MySQL REPEATABLE READ so a request that
+			// waited for the resource lock cannot validate against an older action
+			// snapshot. The database may resolve an action/resource lock inversion by
+			// aborting one transaction; callers fail closed and retry that operation.
+			$sql .= ' FOR UPDATE';
+		}
 		$resql = $this->db->query($sql);
 		if (!$resql) {
 			dol_syslog(__METHOD__.': '.$this->db->lasterror(), LOG_ERR);

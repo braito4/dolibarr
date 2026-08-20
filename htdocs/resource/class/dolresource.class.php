@@ -981,6 +981,8 @@ class Dolresource extends CommonObject
 	 */
 	public function updateElementResource($user = null, int $notrigger = 0)
 	{
+		global $langs;
+
 		$error = 0;
 		$this->date_modification = dol_now();
 
@@ -1070,13 +1072,57 @@ class Dolresource extends CommonObject
 		$sql .= " tms = ".(dol_strlen((string) $this->date_modification) != 0 ? "'".$this->db->idate($this->date_modification)."'" : 'null');
 		$sql .= " WHERE rowid=".((int) $this->id);
 
-		$this->db->begin();
+		if (!$this->db->begin()) {
+			$this->error = $this->db->lasterror();
+			return -1;
+		}
 
-		dol_syslog(get_class($this)."::update", LOG_DEBUG);
-		$resql = $this->db->query($sql);
-		if (!$resql) {
-			$error++;
-			$this->errors[] = "Error ".$this->db->lasterror();
+		if ($this->element_type === 'action' && $this->resource_type === 'dolresource' && (int) $this->busy === 1
+			&& getDolGlobalString('RESOURCE_USED_IN_EVENT_CHECK')) {
+			$lockSuffix = in_array($this->db->type, array('sqlite', 'sqlite3'), true) ? '' : ' FOR UPDATE';
+			$actionSql = 'SELECT datep, datep2, fulldayevent FROM '.MAIN_DB_PREFIX.'actioncomm';
+			$actionSql .= ' WHERE id = '.((int) $this->element_id).' AND entity IN ('.getEntity('actioncomm').')'.$lockSuffix;
+			$actionResult = $this->db->query($actionSql);
+			$actionObject = $actionResult ? $this->db->fetch_object($actionResult) : null;
+			if (!$actionResult || !$actionObject) {
+				$this->errors[] = $actionResult ? 'Agenda action not found in the current entity scope' : $this->db->lasterror();
+				$error++;
+			} else {
+				$dateStartTimestamp = $this->db->jdate($actionObject->datep);
+				$dateEndTimestamp = $this->db->jdate($actionObject->datep2);
+				if ($dateStartTimestamp > 0 && $dateEndTimestamp <= 0) {
+					if (!empty($actionObject->fulldayevent)) {
+						$startParts = dol_getdate($dateStartTimestamp);
+						$dateStartTimestamp = dol_mktime(0, 0, 0, $startParts['mon'], $startParts['mday'], $startParts['year']);
+						$dateEndTimestamp = dol_mktime(0, 0, 0, $startParts['mon'], $startParts['mday'] + 1, $startParts['year']);
+					} else {
+						$dateEndTimestamp = $dateStartTimestamp + 1;
+					}
+				}
+				if ($dateStartTimestamp > 0 && $dateEndTimestamp > dol_now() && $dateEndTimestamp > $dateStartTimestamp) {
+					require_once DOL_DOCUMENT_ROOT.'/resource/class/resourcereservationmanager.class.php';
+					$manager = new ResourceReservationManager($this->db);
+					if (!$manager->canReserveExclusiveAction(
+						(int) $this->resource_id,
+						(int) $this->element_id,
+						$this->db->idate($dateStartTimestamp),
+						$this->db->idate($dateEndTimestamp)
+					)) {
+						$langs->load('resource');
+						$this->errors[] = $langs->trans('ErrorResourcesAlreadyInUse');
+						$error++;
+					}
+				}
+			}
+		}
+
+		if (!$error) {
+			dol_syslog(get_class($this)."::update", LOG_DEBUG);
+			$resql = $this->db->query($sql);
+			if (!$resql) {
+				$error++;
+				$this->errors[] = "Error ".$this->db->lasterror();
+			}
 		}
 
 		if (!$error && $user !== null) {
