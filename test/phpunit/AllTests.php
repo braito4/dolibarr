@@ -218,6 +218,9 @@ class AllTests
 		require_once dirname(__FILE__).'/ResourceServiceRelationTest.php';
 		$suite->addTestSuite('ResourceServiceRelationTest');
 
+		require_once dirname(__FILE__).'/ResourceAvailabilityCalendarTest.php';
+		$suite->addTestSuite('ResourceAvailabilityCalendarTest');
+
 		require_once dirname(__FILE__).'/WorkstationTest.php';
 		$suite->addTestSuite('WorkstationTest');
 
