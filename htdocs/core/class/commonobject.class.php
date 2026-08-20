@@ -1305,7 +1305,6 @@ abstract class CommonObject
 		return $linktoreturn;
 	}
 
-
 	// phpcs:disable PEAR.NamingConventions.ValidFunctionName.ScopeNotCamelCaps
 	/**
 	 *  Add a link between element $this->element and a contact
@@ -6054,31 +6053,74 @@ abstract class CommonObject
 	}
 
 
+	/**
+	 * Lock a known polymorphic resource target before a relation is inserted.
+	 *
+	 * @param int    $resourceId   Target id
+	 * @param string $resourceType Target implementation
+	 * @return bool
+	 */
+	private function lockElementResourceTarget($resourceId, $resourceType)
+	{
+		if (in_array($resourceType, array('dolresource', 'resource'), true)) {
+			$table = 'resource';
+			$entityScope = getEntity('resource');
+		} elseif ($resourceType === 'bookcal_calendar') {
+			$table = 'bookcal_calendar';
+			$entityScope = getEntity('calendar', 0);
+		} else {
+			return true;
+		}
+		$sql = 'SELECT rowid FROM '.$this->db->prefix().$table;
+		$sql .= ' WHERE rowid = '.((int) $resourceId).' AND entity IN ('.$entityScope.')';
+		if (!in_array($this->db->type, array('sqlite', 'sqlite3'), true)) {
+			$sql .= ' FOR UPDATE';
+		}
+		$resql = $this->db->query($sql);
+		return $resql && $this->db->num_rows($resql) === 1;
+	}
+
 	// phpcs:disable PEAR.NamingConventions.ValidFunctionName.ScopeNotCamelCaps
 	/**
-	 *	Add resources to the current object : add entry into llx_element_resources
-	 *	Need $this->element & $this->id
+	 * Add a generic resource link to the current object.
 	 *
-	 *	@param		int		$resource_id		Resource id
-	 *	@param		string	$resource_type		'resource'
-	 *	@param		int		$busy				Busy or not
-	 *	@param		int		$mandatory			Mandatory or not
-	 *  @param		int		$notrigger			Disable all triggers
-	 *	@return		int							Return integer <=0 if KO, >0 if OK
+	 * @param int    $resource_id   Resource id
+	 * @param string $resource_type Resource type
+	 * @param int    $busy          Busy or not
+	 * @param int    $mandatory     Mandatory or not
+	 * @param int    $notrigger     Disable all triggers
+	 * @return int Return integer <=0 if KO, >0 if OK
 	 */
 	public function add_element_resource($resource_id, $resource_type, $busy = 0, $mandatory = 0, $notrigger = 0)
 	{
 		// phpcs:enable
 		global $user;
-		$this->db->begin();
+		if (!$this->db->begin()) {
+			$this->error = $this->db->lasterror();
+			return -1;
+		}
+		if (!$this->lockElementResourceTarget($resource_id, $resource_type)) {
+			$this->error = $this->db->lasterror() ?: 'Resource target not found in the current entity scope';
+			$this->db->rollback();
+			return -1;
+		}
+		$lockSuffix = in_array($this->db->type, array('sqlite', 'sqlite3'), true) ? '' : ' FOR UPDATE';
+		$sql = 'SELECT rowid FROM '.$this->db->prefix().'element_resources';
+		$sql .= ' WHERE resource_id = '.((int) $resource_id);
+		$sql .= " AND resource_type = '".$this->db->escape($resource_type)."'";
+		$sql .= ' AND element_id = '.((int) $this->id);
+		$sql .= " AND element_type = '".$this->db->escape($this->element)."'";
+		$sql .= " AND (relation_kind = 'link' OR relation_kind IS NULL)";
+		$sql .= ' ORDER BY rowid'.$lockSuffix;
+		$resql = $this->db->query($sql);
+		if (!$resql || $this->db->num_rows($resql) > 0) {
+			$this->error = $resql ? 'Resource link already exists' : $this->db->lasterror();
+			$this->db->rollback();
+			return $resql ? 0 : -1;
+		}
 
 		$sql = "INSERT INTO ".$this->db->prefix()."element_resources (";
-		$sql .= "resource_id";
-		$sql .= ", resource_type";
-		$sql .= ", element_id";
-		$sql .= ", element_type";
-		$sql .= ", busy";
-		$sql .= ", mandatory";
+		$sql .= "resource_id, resource_type, element_id, element_type, busy, mandatory";
 		$sql .= ") VALUES (";
 		$sql .= ((int) $resource_id);
 		$sql .= ", '".$this->db->escape($resource_type)."'";
@@ -6089,6 +6131,182 @@ abstract class CommonObject
 		$sql .= ")";
 
 		dol_syslog(get_class($this)."::add_element_resource", LOG_DEBUG);
+		if (!$this->db->query($sql)) {
+			$this->error = $this->db->lasterror();
+			$this->db->rollback();
+			return 0;
+		}
+		if (!$notrigger) {
+			$result = $this->call_trigger(strtoupper($this->TRIGGER_PREFIX).'_ADD_RESOURCE', $user);
+			if ($result < 0) {
+				$this->db->rollback();
+				return -1;
+			}
+		}
+		$this->db->commit();
+		return 1;
+	}
+
+	// phpcs:disable PEAR.NamingConventions.ValidFunctionName.ScopeNotCamelCaps
+	/**
+	 * Add a resource requirement to a product or service.
+	 *
+	 *	@param		int		$resource_id		Resource id
+	 *	@param		string	$resource_type		'resource'
+	 *	@param		int		$busy				Busy or not
+	 *	@param		int		$mandatory			Mandatory or not
+	 *  @param		int		$notrigger			Disable all triggers
+	 *  @param		int		$position			Preference position (0 = append)
+	 *  @param		float	$usersPerServiceUnit	Number of resource users consumed by one service unit
+	 *  @param		array<string,mixed>	$requirement	Requirement metadata for product/service relations
+	 *	@return		int							Return integer <=0 if KO, >0 if OK
+	 */
+	public function add_element_resource_requirement($resource_id, $resource_type, $busy = 0, $mandatory = 0, $notrigger = 0, $position = 0, $usersPerServiceUnit = 0.0, array $requirement = array())
+	{
+		// phpcs:enable
+		global $user;
+		if (!in_array($this->element, array('product', 'service'), true)) {
+			$this->error = 'Resource requirements can only be attached to products or services';
+			return -1;
+		}
+		$allowedValues = array(
+			'resource_role' => array('capacity', 'production', 'delivery', 'equipment', 'operator'),
+			'scheduling_mode' => array('same_as_parent', 'fixed', 'next_available', 'within_window', 'manual'),
+			'start_input_mode' => array('none', 'date', 'datetime'),
+			'end_input_mode' => array('none', 'date', 'datetime', 'calculated'),
+			'time_precision' => array('day', 'hour', 'minute', 'second'),
+			'context_scope' => array('service_line', 'same_proposal'),
+			'demand_source' => array('service_quantity', 'product_lines'),
+			'capacity_metrics' => array('units', 'volume', 'volume_weight'),
+			'selection_policy' => array('preference_order', 'smallest_sufficient'),
+		);
+		$defaults = array(
+			'resource_role' => 'capacity',
+			'scheduling_mode' => 'same_as_parent',
+			'start_input_mode' => 'none',
+			'end_input_mode' => 'none',
+			'time_precision' => 'minute',
+			'context_scope' => 'service_line',
+			'demand_source' => 'service_quantity',
+			'capacity_metrics' => 'units',
+			'selection_policy' => 'preference_order',
+		);
+		foreach ($allowedValues as $field => $values) {
+			$value = !empty($requirement[$field]) ? $requirement[$field] : $defaults[$field];
+			if (!in_array($value, $values, true)) {
+				$this->error = 'Invalid resource requirement field: '.$field;
+				return -1;
+			}
+			$requirement[$field] = $value;
+		}
+		if ($resource_id <= 0 || empty($resource_type)
+			|| (isset($requirement['quantity_required']) && (float) $requirement['quantity_required'] <= 0)
+			|| $usersPerServiceUnit < 0) {
+			$this->error = 'Invalid resource requirement quantity or target';
+			return -1;
+		}
+		foreach (array('duration_base', 'duration_per_unit', 'setup_duration', 'cleanup_duration') as $durationField) {
+			if (isset($requirement[$durationField]) && (int) $requirement[$durationField] < 0) {
+				$this->error = 'Invalid resource requirement duration';
+				return -1;
+			}
+		}
+		if (!empty($requirement['requirement_group']) && dol_strlen($requirement['requirement_group']) > 32) {
+			$this->error = 'Resource requirement group is too long';
+			return -1;
+		}
+		if (!$this->db->begin()) {
+			$this->error = $this->db->lasterror();
+			return -1;
+		}
+		if (!$this->lockElementResourceTarget($resource_id, $resource_type)) {
+			$this->error = $this->db->lasterror() ?: 'Resource target not found in the current entity scope';
+			$this->db->rollback();
+			return -1;
+		}
+		$requirementRole = $requirement['resource_role'];
+		$requirementGroup = !empty($requirement['requirement_group']) ? $requirement['requirement_group'] : null;
+		$lockSuffix = in_array($this->db->type, array('sqlite', 'sqlite3'), true) ? '' : ' FOR UPDATE';
+		$sql = 'SELECT rowid FROM '.$this->db->prefix().'element_resources';
+		$sql .= ' WHERE resource_id = '.((int) $resource_id);
+		$sql .= " AND resource_type = '".$this->db->escape($resource_type)."'";
+		$sql .= ' AND element_id = '.((int) $this->id);
+		$sql .= " AND element_type IN ('product', 'service')";
+		$sql .= " AND relation_kind = 'requirement'";
+		$sql .= " AND resource_role = '".$this->db->escape($requirementRole)."'";
+		$sql .= $requirementGroup === null
+			? ' AND requirement_group IS NULL'
+			: " AND requirement_group = '".$this->db->escape($requirementGroup)."'";
+		$sql .= ' ORDER BY rowid'.$lockSuffix;
+		$resql = $this->db->query($sql);
+		if (!$resql || $this->db->num_rows($resql) > 0) {
+			$this->error = $resql ? 'Resource requirement already exists in this role and group' : $this->db->lasterror();
+			$this->db->rollback();
+			return $resql ? 0 : -1;
+		}
+
+		if ($position <= 0) {
+			$sql = "SELECT COALESCE(MAX(position), 0) + 1 AS next_position";
+			$sql .= " FROM ".$this->db->prefix()."element_resources";
+			$sql .= " WHERE element_id = ".((int) $this->id);
+			$sql .= " AND element_type IN ('product', 'service')";
+			$sql .= " AND resource_type = '".$this->db->escape($resource_type)."'";
+			$sql .= " AND relation_kind = 'requirement'";
+			$sql .= $lockSuffix;
+			$resql = $this->db->query($sql);
+			if ($resql && ($obj = $this->db->fetch_object($resql))) {
+				$position = (int) $obj->next_position;
+			} else {
+				$this->error = $this->db->lasterror();
+				$this->db->rollback();
+				return -1;
+			}
+		}
+
+		$sql = "INSERT INTO ".$this->db->prefix()."element_resources (";
+		$sql .= "resource_id";
+		$sql .= ", resource_type";
+		$sql .= ", element_id";
+		$sql .= ", element_type";
+		$sql .= ", busy";
+		$sql .= ", mandatory";
+		$sql .= ", position";
+		$sql .= ", users_per_service_unit";
+		$sql .= ", relation_kind, resource_role, requirement_group, quantity_required";
+		$sql .= ", duration_base, duration_per_unit, setup_duration, cleanup_duration";
+		$sql .= ", scheduling_mode, start_input_mode, end_input_mode, time_precision, simultaneous, allow_split";
+		$sql .= ", context_scope, demand_source, capacity_metrics, required_location, selection_policy";
+		$sql .= ") VALUES (";
+		$sql .= ((int) $resource_id);
+		$sql .= ", '".$this->db->escape($resource_type)."'";
+		$sql .= ", '".$this->db->escape((string) $this->id)."'";
+		$sql .= ", '".$this->db->escape($this->element)."'";
+		$sql .= ", '".$this->db->escape((string) $busy)."'";
+		$sql .= ", '".$this->db->escape((string) $mandatory)."'";
+		$sql .= ", ".((int) $position);
+		$sql .= ", ".price2num($usersPerServiceUnit, 'MS');
+		$sql .= ", 'requirement'";
+		$sql .= ", '".$this->db->escape($requirementRole)."'";
+		$sql .= ", ".($requirementGroup !== null ? "'".$this->db->escape($requirementGroup)."'" : 'NULL');
+		$sql .= ", ".price2num(isset($requirement['quantity_required']) ? $requirement['quantity_required'] : 1, 'MS');
+		$sql .= ", ".((int) (!empty($requirement['duration_base']) ? $requirement['duration_base'] : 0));
+		$sql .= ", ".((int) (!empty($requirement['duration_per_unit']) ? $requirement['duration_per_unit'] : 0));
+		$sql .= ", ".((int) (!empty($requirement['setup_duration']) ? $requirement['setup_duration'] : 0));
+		$sql .= ", ".((int) (!empty($requirement['cleanup_duration']) ? $requirement['cleanup_duration'] : 0));
+		$sql .= ", '".$this->db->escape(!empty($requirement['scheduling_mode']) ? $requirement['scheduling_mode'] : 'same_as_parent')."'";
+		$sql .= ", '".$this->db->escape(!empty($requirement['start_input_mode']) ? $requirement['start_input_mode'] : 'none')."'";
+		$sql .= ", '".$this->db->escape(!empty($requirement['end_input_mode']) ? $requirement['end_input_mode'] : 'none')."'";
+		$sql .= ", '".$this->db->escape(!empty($requirement['time_precision']) ? $requirement['time_precision'] : 'minute')."'";
+		$sql .= ", ".(!isset($requirement['simultaneous']) || !empty($requirement['simultaneous']) ? 1 : 0);
+		$sql .= ", ".(!empty($requirement['allow_split']) ? 1 : 0);
+		$sql .= ", '".$this->db->escape(!empty($requirement['context_scope']) ? $requirement['context_scope'] : 'service_line')."'";
+		$sql .= ", '".$this->db->escape(!empty($requirement['demand_source']) ? $requirement['demand_source'] : 'service_quantity')."'";
+		$sql .= ", '".$this->db->escape(!empty($requirement['capacity_metrics']) ? $requirement['capacity_metrics'] : 'units')."'";
+		$sql .= ", ".(!empty($requirement['required_location']) ? "'".$this->db->escape($requirement['required_location'])."'" : 'NULL');
+		$sql .= ", '".$this->db->escape(!empty($requirement['selection_policy']) ? $requirement['selection_policy'] : 'preference_order')."'";
+		$sql .= ")";
+
+		dol_syslog(get_class($this)."::add_element_resource_requirement", LOG_DEBUG);
 		if ($this->db->query($sql)) {
 			if (!$notrigger) {
 				$result = $this->call_trigger(strtoupper($this->TRIGGER_PREFIX).'_ADD_RESOURCE', $user);
@@ -6124,12 +6342,14 @@ abstract class CommonObject
 
 		$sql = "DELETE FROM ".$this->db->prefix()."element_resources";
 		$sql .= " WHERE rowid = ".((int) $rowid);
+		$sql .= " AND element_id = ".((int) $this->id);
+		$sql .= " AND element_type = '".$this->db->escape($this->element)."'";
 
 		dol_syslog(get_class($this)."::delete_resource", LOG_DEBUG);
 
 		$resql = $this->db->query($sql);
-		if (!$resql) {
-			$this->error = $this->db->lasterror();
+		if (!$resql || $this->db->affected_rows($resql) !== 1) {
+			$this->error = $resql ? 'Resource link does not belong to this object' : $this->db->lasterror();
 			$this->db->rollback();
 			return -1;
 		} else {

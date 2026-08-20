@@ -215,6 +215,9 @@ class AllTests
 		require_once dirname(__FILE__).'/ResourceCharacteristicsTest.php';
 		$suite->addTestSuite('ResourceCharacteristicsTest');
 
+		require_once dirname(__FILE__).'/ResourceServiceRelationTest.php';
+		$suite->addTestSuite('ResourceServiceRelationTest');
+
 		require_once dirname(__FILE__).'/WorkstationTest.php';
 		$suite->addTestSuite('WorkstationTest');
 

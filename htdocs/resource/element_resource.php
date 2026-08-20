@@ -30,6 +30,7 @@
 // Load Dolibarr environment
 require '../main.inc.php';
 require_once DOL_DOCUMENT_ROOT.'/resource/class/dolresource.class.php';
+require_once DOL_DOCUMENT_ROOT.'/resource/class/resourcerequirementmanager.class.php';
 require_once DOL_DOCUMENT_ROOT.'/core/lib/functions2.lib.php';
 require_once DOL_DOCUMENT_ROOT.'/fichinter/class/fichinter.class.php';
 if (isModEnabled('project')) {
@@ -77,6 +78,67 @@ $mandatory              = GETPOSTINT('mandatory');
 $cancel                 = GETPOST('cancel', 'alpha');
 $confirm                = GETPOST('confirm', 'alpha');
 $socid                  = GETPOSTINT('socid');
+$direction              = GETPOST('direction', 'alpha');
+$users_per_service_unit = (float) price2num(GETPOST('users_per_service_unit', 'alpha'), 'MS');
+$resource_role          = GETPOST('resource_role', 'alpha') ?: 'capacity';
+$requirement_group = GETPOST('requirement_group', 'alphanohtml');
+$default_requirement_group = ResourceRequirementManager::getDefaultRequirementGroup($resource_role);
+$quantity_required      = (float) price2num(GETPOST('quantity_required', 'alpha'), 'MS');
+$duration_base          = GETPOSTINT('duration_base');
+$duration_per_unit      = GETPOSTINT('duration_per_unit');
+$setup_duration         = GETPOSTINT('setup_duration');
+$cleanup_duration       = GETPOSTINT('cleanup_duration');
+$scheduling_mode        = GETPOST('scheduling_mode', 'alpha') ?: 'same_as_parent';
+$start_input_mode       = GETPOST('start_input_mode', 'alpha') ?: 'none';
+$end_input_mode         = GETPOST('end_input_mode', 'alpha') ?: 'none';
+$time_precision         = GETPOST('time_precision', 'alpha') ?: 'minute';
+$simultaneous           = GETPOSTINT('simultaneous');
+$allow_split            = GETPOSTINT('allow_split');
+$context_scope          = GETPOST('context_scope', 'alpha') ?: 'service_line';
+$demand_source          = GETPOST('demand_source', 'alpha') ?: 'service_quantity';
+$capacity_metrics       = GETPOST('capacity_metrics', 'alpha') ?: 'units';
+$required_location      = GETPOST('required_location', 'alphanohtml');
+$selection_policy       = GETPOST('selection_policy', 'alpha') ?: 'preference_order';
+
+$allowedResourceRoles = array('capacity', 'production', 'delivery', 'equipment', 'operator');
+$allowedSchedulingModes = array('same_as_parent', 'fixed', 'next_available', 'within_window', 'manual');
+$allowedStartInputModes = array('none', 'date', 'datetime');
+$allowedEndInputModes = array('none', 'date', 'datetime', 'calculated');
+$allowedTimePrecisions = array('day', 'hour', 'minute', 'second');
+$allowedContextScopes = array('service_line', 'same_proposal');
+$allowedDemandSources = array('service_quantity', 'product_lines');
+$allowedCapacityMetrics = array('units', 'volume', 'volume_weight');
+$allowedSelectionPolicies = array('preference_order', 'smallest_sufficient');
+if (!in_array($resource_role, $allowedResourceRoles, true)) {
+	$resource_role = 'capacity';
+}
+if (empty($requirement_group)) {
+	$requirement_group = ResourceRequirementManager::getDefaultRequirementGroup($resource_role);
+}
+if (!in_array($scheduling_mode, $allowedSchedulingModes, true)) {
+	$scheduling_mode = 'same_as_parent';
+}
+if (!in_array($start_input_mode, $allowedStartInputModes, true)) {
+	$start_input_mode = 'none';
+}
+if (!in_array($end_input_mode, $allowedEndInputModes, true)) {
+	$end_input_mode = 'none';
+}
+if (!in_array($time_precision, $allowedTimePrecisions, true)) {
+	$time_precision = 'minute';
+}
+if (!in_array($context_scope, $allowedContextScopes, true)) {
+	$context_scope = 'service_line';
+}
+if (!in_array($demand_source, $allowedDemandSources, true)) {
+	$demand_source = 'service_quantity';
+}
+if (!in_array($capacity_metrics, $allowedCapacityMetrics, true)) {
+	$capacity_metrics = 'units';
+}
+if (!in_array($selection_policy, $allowedSelectionPolicies, true)) {
+	$selection_policy = 'preference_order';
+}
 
 if (empty($mandatory)) {
 	$mandatory = 0;
@@ -90,6 +152,10 @@ if ($socid > 0) { // Special for thirdparty
 	$element = 'societe';
 }
 
+if (!in_array($element, array('action', 'fichinter', 'product', 'service', 'societe'), true)) {
+	accessforbidden();
+}
+
 if (!$user->hasRight('resource', 'read')) {
 	accessforbidden();
 }
@@ -101,18 +167,34 @@ if ($element == 'action') {
 if ($element == 'fichinter') {
 	$result = restrictedArea($user, 'ficheinter', $element_id, 'fichinter');
 }
+if ($element == 'societe') {
+	$result = restrictedArea($user, 'societe', $element_id, '&societe');
+}
 if ($element == 'product' || $element == 'service') {	// When RESOURCE_ON_PRODUCTS or RESOURCE_ON_SERVICES is set
 	$tmpobject = new Product($db);
 	$tmpobject->fetch($element_id);
-	$fieldtype = $tmpobject->type;
-	$result = restrictedArea($user, 'produit|service', $element_id, 'product&product', '', '', (string) $fieldtype);
+	if ($tmpobject->type == Product::TYPE_PRODUCT) {
+		$result = restrictedArea($user, 'produit', $element_id, 'product&product');
+	} else {
+		$result = restrictedArea($user, 'service', $element_id, 'product&product');
+	}
 }
 
-// TODO
-//$permissiontoadd should be set according to $element
-//$permissiontodelete should be set according to $element
-$permissiontoadd = $user->hasRight('resource', 'write');
-$permissiontodelete = $user->hasRight('resource', 'delete');
+$permissiontoadd = $user->hasRight('resource', 'link');
+if ($element == 'product' || $element == 'service') {
+	$permissiontoadd = $permissiontoadd && (($tmpobject->type == Product::TYPE_PRODUCT && $user->hasRight('produit', 'creer'))
+		|| ($tmpobject->type == Product::TYPE_SERVICE && $user->hasRight('service', 'creer')));
+}
+if ($element == 'action') {
+	$permissiontoadd = $permissiontoadd && ($user->hasRight('agenda', 'myactions', 'create') || $user->hasRight('agenda', 'allactions', 'create'));
+}
+if ($element == 'fichinter') {
+	$permissiontoadd = $permissiontoadd && $user->hasRight('ficheinter', 'creer');
+}
+if ($element == 'societe') {
+	$permissiontoadd = $permissiontoadd && $user->hasRight('societe', 'creer');
+}
+$permissiontodelete = $permissiontoadd;
 
 
 /*
@@ -129,76 +211,102 @@ if (empty($reshook)) {
 	$error = 0;
 	$objstat = null;
 
+	if ($action == 'move_resource' && $permissiontoadd && ($element == 'product' || $element == 'service')) {
+		$db->begin();
+		$lockSuffix = in_array($db->type, array('sqlite', 'sqlite3'), true) ? '' : ' FOR UPDATE';
+		$sql = "SELECT rowid, position FROM ".MAIN_DB_PREFIX."element_resources";
+		$sql .= " WHERE rowid = ".((int) $lineid);
+		$sql .= " AND element_id = ".((int) $element_id);
+		$sql .= " AND element_type = '".$db->escape($element)."'";
+		$sql .= " AND relation_kind = 'requirement'".$lockSuffix;
+		$resql = $db->query($sql);
+		$current = $resql ? $db->fetch_object($resql) : null;
+		if ($current) {
+			$sql = "SELECT rowid, position FROM ".MAIN_DB_PREFIX."element_resources";
+			$sql .= " WHERE element_id = ".((int) $element_id);
+			$sql .= " AND element_type = '".$db->escape($element)."'";
+			$sql .= " AND resource_type = '".$db->escape($resource_type)."'";
+			$sql .= " AND relation_kind = 'requirement'";
+			if ($direction == 'up') {
+				$sql .= " AND position < ".((int) $current->position);
+				$sql .= " ORDER BY position DESC, rowid DESC";
+			} else {
+				$sql .= " AND position > ".((int) $current->position);
+				$sql .= " ORDER BY position ASC, rowid ASC";
+			}
+			$sql .= $db->plimit(1).$lockSuffix;
+			$resql = $db->query($sql);
+			$swap = $resql ? $db->fetch_object($resql) : null;
+			if ($swap) {
+				$result1 = $db->query("UPDATE ".MAIN_DB_PREFIX."element_resources SET position = ".((int) $swap->position)." WHERE rowid = ".((int) $current->rowid)." AND relation_kind = 'requirement'");
+				$result2 = $db->query("UPDATE ".MAIN_DB_PREFIX."element_resources SET position = ".((int) $current->position)." WHERE rowid = ".((int) $swap->rowid)." AND relation_kind = 'requirement'");
+				if ($result1 && $result2) {
+					$db->commit();
+				} else {
+					$db->rollback();
+				}
+			} else {
+				$db->rollback();
+			}
+		} else {
+			$db->rollback();
+		}
+		header("Location: ".$_SERVER['PHP_SELF']."?element=".urlencode($element)."&element_id=".((int) $element_id));
+		exit;
+	}
+
 	if ($action == 'add_element_resource' && !$cancel && $permissiontoadd) {	// Test on permission already done in header before actions
 		$res = 0;
 		if (!($resource_id > 0)) {
 			$error++;
 			setEventMessages($langs->trans("ErrorFieldRequired", $langs->transnoentitiesnoconv("Resource")), null, 'errors');
 			$action = '';
+		} elseif (!in_array($resource_type, $object->available_resources, true)) {
+			accessforbidden();
 		} else {
+			if (($element == 'product' || $element == 'service') && $users_per_service_unit <= 0) {
+				$users_per_service_unit = 1.0;
+			}
+			if ($resource_type === 'dolresource') {
+				$sql = 'SELECT rowid FROM '.MAIN_DB_PREFIX.'resource';
+				$sql .= ' WHERE rowid = '.((int) $resource_id).' AND entity IN ('.getEntity('resource').')';
+				$resql = $db->query($sql);
+				if (!$resql || !$db->num_rows($resql)) {
+					accessforbidden();
+				}
+			}
 			$objstat = fetchObjectByElement($element_id, $element, $element_ref);
 			$objstat->element = $element; // For externals module, we need to keep @xx
 
-			// TODO : add this check at update_linked_resource and when modifying event start or end date
-			// check if an event resource is already in use
-			if (getDolGlobalString('RESOURCE_USED_IN_EVENT_CHECK') && $objstat->element == 'action' && $resource_type == 'dolresource' && intval($busy) == 1) {
-				/** @var ActionComm $objstat */
-				'@phan-var-force ActionComm $objstat';
-				$eventDateStart = $objstat->datep;
-				$eventDateEnd   = $objstat->datef;
-				$isFullDayEvent = $objstat->fulldayevent;
-				if (empty($eventDateEnd)) {
-					if ($isFullDayEvent) {
-						$eventDateStartArr = dol_getdate($eventDateStart);
-						$eventDateStart = dol_mktime(0, 0, 0, $eventDateStartArr['mon'], $eventDateStartArr['mday'], $eventDateStartArr['year']);
-						$eventDateEnd = dol_mktime(23, 59, 59, $eventDateStartArr['mon'], $eventDateStartArr['mday'], $eventDateStartArr['year']);
-					}
-				}
-
-				$sql  = "SELECT er.rowid, r.ref as r_ref, ac.id as ac_id, ac.label as ac_label";
-				$sql .= " FROM ".MAIN_DB_PREFIX."element_resources as er";
-				$sql .= " INNER JOIN ".MAIN_DB_PREFIX."resource as r ON r.rowid = er.resource_id AND er.resource_type = '".$db->escape($resource_type)."'";
-				$sql .= " INNER JOIN ".MAIN_DB_PREFIX."actioncomm as ac ON ac.id = er.element_id AND er.element_type = '".$db->escape($objstat->element)."'";
-				$sql .= " WHERE er.resource_id = ".((int) $resource_id);
-				$sql .= " AND er.busy = 1";
-				$sql .= " AND (";
-
-				// event date start between ac.datep and ac.datep2 (if datep2 is null we consider there is no end)
-				$sql .= " (ac.datep <= '".$db->idate($eventDateStart)."' AND (ac.datep2 IS NULL OR ac.datep2 >= '".$db->idate($eventDateStart)."'))";
-				// event date end between ac.datep and ac.datep2
-				if (!empty($eventDateEnd)) {
-					$sql .= " OR (ac.datep <= '".$db->idate($eventDateEnd)."' AND (ac.datep2 >= '".$db->idate($eventDateEnd)."'))";
-				}
-				// event date start before ac.datep and event date end after ac.datep2
-				$sql .= " OR (";
-				$sql .= "ac.datep >= '".$db->idate($eventDateStart)."'";
-				if (!empty($eventDateEnd)) {
-					$sql .= " AND (ac.datep2 IS NOT NULL AND ac.datep2 <= '".$db->idate($eventDateEnd)."')";
-				}
-				$sql .= ")";
-
-				$sql .= ")";
-				$resql = $db->query($sql);
-				if (!$resql) {
-					$error++;
-					$objstat->error    = $db->lasterror();
-					$objstat->errors[] = $objstat->error;
-				} else {
-					if ($db->num_rows($resql) > 0) {
-						// Resource already in use
-						$error++;
-						$objstat->error = $langs->trans('ErrorResourcesAlreadyInUse').' : ';
-						while ($obj = $db->fetch_object($resql)) {
-							$objstat->error .= '<br> - '.$langs->trans('ErrorResourceUseInEvent', $obj->r_ref, $obj->ac_label.' ['.$obj->ac_id.']');
-						}
-						$objstat->errors[] = $objstat->error;
-					}
-					$db->free($resql);
-				}
-			}
-
 			if (!$error) {
-				$res = $objstat->add_element_resource($resource_id, $resource_type, $busy, $mandatory);
+				if ($element == 'product' || $element == 'service') {
+					$busy = 0;
+				}
+				$requirement = array(
+					'resource_role' => $resource_role,
+					'requirement_group' => $requirement_group,
+					'quantity_required' => $quantity_required > 0 ? $quantity_required : 1,
+					'duration_base' => $duration_base,
+					'duration_per_unit' => $duration_per_unit,
+					'setup_duration' => $setup_duration,
+					'cleanup_duration' => $cleanup_duration,
+					'scheduling_mode' => $scheduling_mode,
+					'start_input_mode' => $start_input_mode,
+					'end_input_mode' => $end_input_mode,
+					'time_precision' => $time_precision,
+					'simultaneous' => $simultaneous,
+					'allow_split' => $allow_split,
+					'context_scope' => $context_scope,
+					'demand_source' => $demand_source,
+					'capacity_metrics' => $capacity_metrics,
+					'required_location' => $required_location,
+					'selection_policy' => $selection_policy,
+				);
+				if ($element == 'product' || $element == 'service') {
+					$res = $objstat->add_element_resource_requirement($resource_id, $resource_type, $busy, $mandatory, 0, 0, $users_per_service_unit, $requirement);
+				} else {
+					$res = $objstat->add_element_resource($resource_id, $resource_type, $busy, $mandatory);
+				}
 			}
 		}
 
@@ -214,62 +322,39 @@ if (empty($reshook)) {
 	// Update resource
 	if ($action == 'update_linked_resource' && $permissiontoadd && !$cancel) {
 		$res = $object->fetchElementResource($lineid);
-		if ($res) {
+		if ($res > 0 && ($object->element_type !== $element || (int) $object->element_id !== (int) $element_id)) {
+			accessforbidden();
+		}
+		if ($res > 0 && ($element == 'product' || $element == 'service') && $object->relation_kind !== 'requirement') {
+			accessforbidden();
+		}
+		if ($res > 0) {
 			$object->busy = $busy;
 			$object->mandatory = $mandatory;
-
-			if (getDolGlobalString('RESOURCE_USED_IN_EVENT_CHECK') && $object->objelement instanceof ActionComm && $object->element_type == 'action' && $object->resource_type == 'dolresource' && intval($object->busy) == 1) {
-				$eventDateStart = $object->objelement->datep;  // @phan-suppress-current-line PhanUndeclaredProperty
-				$eventDateEnd   = $object->objelement->datef;  // @phan-suppress-current-line PhanUndeclaredProperty
-				$isFullDayEvent = $object->objelement->fulldayevent; // @phan-suppress-current-line PhanUndeclaredProperty
-				if (empty($eventDateEnd)) {
-					if ($isFullDayEvent) {
-						$eventDateStartArr = dol_getdate($eventDateStart);
-						$eventDateStart = dol_mktime(0, 0, 0, $eventDateStartArr['mon'], $eventDateStartArr['mday'], $eventDateStartArr['year']);
-						$eventDateEnd   = dol_mktime(23, 59, 59, $eventDateStartArr['mon'], $eventDateStartArr['mday'], $eventDateStartArr['year']);
-					}
+			if ($object->element_type == 'product' || $object->element_type == 'service') {
+				if ($users_per_service_unit <= 0) {
+					$users_per_service_unit = 1.0;
 				}
-
-				$sql  = "SELECT er.rowid, r.ref as r_ref, ac.id as ac_id, ac.label as ac_label";
-				$sql .= " FROM ".MAIN_DB_PREFIX."element_resources as er";
-				$sql .= " INNER JOIN ".MAIN_DB_PREFIX."resource as r ON r.rowid = er.resource_id AND er.resource_type = '".$db->escape($object->resource_type)."'";
-				$sql .= " INNER JOIN ".MAIN_DB_PREFIX."actioncomm as ac ON ac.id = er.element_id AND er.element_type = '".$db->escape($object->element_type)."'";
-				$sql .= " WHERE er.resource_id = ".((int) $object->resource_id);
-				$sql .= " AND ac.id <> ".((int) $object->element_id);
-				$sql .= " AND er.busy = 1";
-				$sql .= " AND (";
-
-				// event date start between ac.datep and ac.datep2 (if datep2 is null we consider there is no end)
-				$sql .= " (ac.datep <= '".$db->idate($eventDateStart)."' AND (ac.datep2 IS NULL OR ac.datep2 >= '".$db->idate($eventDateStart)."'))";
-				// event date end between ac.datep and ac.datep2
-				if (!empty($eventDateEnd)) {
-					$sql .= " OR (ac.datep <= '".$db->idate($eventDateEnd)."' AND (ac.datep2 IS NULL OR ac.datep2 >= '".$db->idate($eventDateEnd)."'))";
-				}
-				// event date start before ac.datep and event date end after ac.datep2
-				$sql .= " OR (";
-				$sql .= "ac.datep >= '".$db->idate($eventDateStart)."'";
-				if (!empty($eventDateEnd)) {
-					$sql .= " AND (ac.datep2 IS NOT NULL AND ac.datep2 <= '".$db->idate($eventDateEnd)."')";
-				}
-				$sql .= ")";
-
-				$sql .= ")";
-				$resql = $db->query($sql);
-				if (!$resql) {
-					$error++;
-					$object->error = $db->lasterror();
-					$object->errors[] = $object->error;
-				} else {
-					if ($db->num_rows($resql) > 0) {
-						// Resource already in use
-						$error++;
-						$object->error = $langs->trans('ErrorResourcesAlreadyInUse').' : ';
-						while ($obj = $db->fetch_object($resql)) {
-							$object->error .= '<br> - '.$langs->trans('ErrorResourceUseInEvent', $obj->r_ref, $obj->ac_label.' ['.$obj->ac_id.']');
-						}
-						$object->errors[] = $object->error;
-					}
-					$db->free($resql);
+				if (!$error) {
+					$object->users_per_service_unit = $users_per_service_unit;
+					$object->resource_role = $resource_role;
+					$object->requirement_group = $requirement_group;
+					$object->quantity_required = $quantity_required > 0 ? $quantity_required : 1;
+					$object->duration_base = $duration_base;
+					$object->duration_per_unit = $duration_per_unit;
+					$object->setup_duration = $setup_duration;
+					$object->cleanup_duration = $cleanup_duration;
+					$object->scheduling_mode = $scheduling_mode;
+					$object->start_input_mode = $start_input_mode;
+					$object->end_input_mode = $end_input_mode;
+					$object->time_precision = $time_precision;
+					$object->simultaneous = $simultaneous;
+					$object->allow_split = $allow_split;
+					$object->context_scope = $context_scope;
+					$object->demand_source = $demand_source;
+					$object->capacity_metrics = $capacity_metrics;
+					$object->required_location = $required_location;
+					$object->selection_policy = $selection_policy;
 				}
 			}
 
@@ -293,7 +378,10 @@ if (empty($reshook)) {
 	// Delete a resource linked to an element
 	if ($action == 'confirm_delete_linked_resource' && $permissiontodelete && $confirm === 'yes') {
 		$res = $object->fetchElementResource($lineid); // to have correct object deleting resource
-		if ($res) {
+		if ($res > 0 && ($object->element_type !== $element || (int) $object->element_id !== (int) $element_id)) {
+			accessforbidden();
+		}
+		if ($res > 0) {
 			$result = $object->objelement->delete_resource($lineid, '');
 
 			if ($result >= 0) {
@@ -669,7 +757,10 @@ if (!$ret) {
 			$defaulttpldir = '/core/tpl';
 			$dirtpls = array_merge($conf->modules_parts['tpl'], array($defaulttpldir), array($path.$defaulttpldir));
 
-			foreach ($dirtpls as $module => $reldir) {
+			// Do not render the add form while editing an existing link. Apart
+			// from reducing clutter, this avoids duplicate field identifiers that
+			// made labels and JavaScript target the wrong form.
+			if ($mode !== 'edit') foreach ($dirtpls as $module => $reldir) {
 				if (file_exists(dol_buildpath($reldir.'/resource_'.$element_prop['element'].'_add.tpl.php'))) {
 					$tpl = dol_buildpath($reldir.'/resource_'.$element_prop['element'].'_add.tpl.php');
 				} else {
