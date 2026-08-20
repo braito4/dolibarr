@@ -289,7 +289,7 @@ $tabsql[DICT_INPUT_METHOD] = "SELECT t.rowid as rowid, t.code, t.libelle, t.acti
 $tabsql[DICT_AVAILABILITY] = "SELECT c.rowid as rowid, c.code, c.label, c.type_duration, c.qty, c.active, c.position FROM ".MAIN_DB_PREFIX."c_availability AS c";
 $tabsql[DICT_INPUT_REASON] = "SELECT t.rowid as rowid, t.code, t.label, t.active FROM ".MAIN_DB_PREFIX."c_input_reason as t";
 $tabsql[DICT_REVENUESTAMP] = "SELECT t.rowid as rowid, t.taux, t.revenuestamp_type, c.label as country, c.code as country_code, t.fk_pays as country_id, t.note, t.active, t.accountancy_code_sell, t.accountancy_code_buy FROM ".MAIN_DB_PREFIX."c_revenuestamp as t, ".MAIN_DB_PREFIX."c_country as c WHERE t.fk_pays=c.rowid";
-$tabsql[DICT_TYPE_RESOURCE] = "SELECT t.rowid as rowid, t.code, t.label, t.active FROM ".MAIN_DB_PREFIX."c_type_resource as t";
+$tabsql[DICT_TYPE_RESOURCE] = "SELECT t.rowid as rowid, t.code, t.label, t.capacity_mode, t.metric_label, t.metric_unit, t.supports_cooldown, t.active FROM ".MAIN_DB_PREFIX."c_type_resource as t";
 $tabsql[DICT_TYPE_CONTAINER] = "SELECT t.rowid as rowid, t.code, t.label, t.active, t.module FROM ".MAIN_DB_PREFIX."c_type_container as t WHERE t.entity IN (".getEntity($tabname[DICT_TYPE_CONTAINER]).")";
 //$tabsql[DICT_UNITS]= "SELECT t.rowid as rowid, t.code, t.label, t.short_label, t.active FROM ".MAIN_DB_PREFIX."c_units as t";
 $tabsql[DICT_STCOMM] = "SELECT t.id    as rowid, t.code, t.libelle, t.picto, t.active FROM ".MAIN_DB_PREFIX."c_stcomm as t";
@@ -383,7 +383,7 @@ $tabfield[DICT_INPUT_METHOD] = "code,libelle";
 $tabfield[DICT_AVAILABILITY] = "code,label,qty,type_duration,position";
 $tabfield[DICT_INPUT_REASON] = "code,label";
 $tabfield[DICT_REVENUESTAMP] = "country_id,country,taux,revenuestamp_type,accountancy_code_sell,accountancy_code_buy,note";
-$tabfield[DICT_TYPE_RESOURCE] = "code,label";
+$tabfield[DICT_TYPE_RESOURCE] = "code,label,capacity_mode,metric_label,metric_unit,supports_cooldown";
 $tabfield[DICT_TYPE_CONTAINER] = "code,label";
 //$tabfield[DICT_UNITS]= "code,label,short_label";
 $tabfield[DICT_STCOMM] = "code,libelle,picto";
@@ -430,7 +430,7 @@ $tabfieldvalue[DICT_INPUT_METHOD] = "code,libelle";
 $tabfieldvalue[DICT_AVAILABILITY] = "code,label,qty,type_duration,position";
 $tabfieldvalue[DICT_INPUT_REASON] = "code,label";
 $tabfieldvalue[DICT_REVENUESTAMP] = "country,taux,revenuestamp_type,accountancy_code_sell,accountancy_code_buy,note";
-$tabfieldvalue[DICT_TYPE_RESOURCE] = "code,label";
+$tabfieldvalue[DICT_TYPE_RESOURCE] = "code,label,capacity_mode,metric_label,metric_unit,supports_cooldown";
 $tabfieldvalue[DICT_TYPE_CONTAINER] = "code,label";
 //$tabfieldvalue[DICT_UNITS]= "code,label,short_label";
 $tabfieldvalue[DICT_STCOMM] = "code,libelle,picto";
@@ -477,7 +477,7 @@ $tabfieldinsert[DICT_INPUT_METHOD] = "code,libelle";
 $tabfieldinsert[DICT_AVAILABILITY] = "code,label,qty,type_duration,position";
 $tabfieldinsert[DICT_INPUT_REASON] = "code,label";
 $tabfieldinsert[DICT_REVENUESTAMP] = "fk_pays,taux,revenuestamp_type,accountancy_code_sell,accountancy_code_buy,note";
-$tabfieldinsert[DICT_TYPE_RESOURCE] = "code,label";
+$tabfieldinsert[DICT_TYPE_RESOURCE] = "code,label,capacity_mode,metric_label,metric_unit,supports_cooldown";
 $tabfieldinsert[DICT_TYPE_CONTAINER] = "code,label,entity";
 //$tabfieldinsert[DICT_UNITS]= "code,label,short_label";
 $tabfieldinsert[DICT_STCOMM] = "code,libelle,picto";
@@ -905,6 +905,10 @@ if (empty($reshook)) {
 		if (GETPOST('actionadd') && $tabname[$id] == "c_actioncomm" && GETPOSTISSET("type") && in_array(GETPOST("type"), array('system', 'systemauto'))) {
 			$ok = 0;
 			setEventMessages($langs->transnoentities('ErrorReservedTypeSystemSystemAuto'), null, 'errors');
+		}
+		if ($id == DICT_TYPE_RESOURCE && !in_array(GETPOST('capacity_mode', 'alpha'), array('none', 'users', 'volume', 'custom'), true)) {
+			$ok = 0;
+			setEventMessages($langs->transnoentities('ErrorBadValueForParameter', 'capacity_mode'), null, 'errors');
 		}
 		if (GETPOSTISSET("code")) {
 			if (GETPOST("code") == '0') {
@@ -2272,6 +2276,19 @@ if ($id > 0) {
 			if ($value == 'type_duration') {
 				$valuetoshow = $langs->trans('Unit');
 			}
+			if ($value == 'capacity_mode') {
+				$valuetoshow = $langs->trans('ResourceCapacityMode');
+			}
+			if ($value == 'metric_label') {
+				$valuetoshow = $langs->trans('ResourceMetricLabel');
+			}
+			if ($value == 'metric_unit') {
+				$valuetoshow = $langs->trans('ResourceMetricUnit');
+			}
+			if ($value == 'supports_cooldown') {
+				$valuetoshow = $langs->trans('ResourceSupportsCooldown');
+				$cssprefix = 'center ';
+			}
 
 			if ($value == 'region_id' || $value == 'country_id' || $value == 'department_buyer_id') {
 				$showfield = 0;
@@ -2639,6 +2656,11 @@ if ($id > 0) {
 								$valuetoshow = yn($obj->{$value});
 							} elseif ($value == 'icon') {
 								$valuetoshow = $obj->{$value}." ".img_picto("", preg_replace('/^fa-/', '', $obj->{$value}));
+							} elseif ($value == 'capacity_mode' && $tabname[$id] == 'c_type_resource') {
+								$valuetoshow = $langs->trans('ResourceCapacityMode'.ucfirst($valuetoshow));
+							} elseif ($value == 'supports_cooldown' && $tabname[$id] == 'c_type_resource') {
+								$valuetoshow = yn($valuetoshow);
+								$class = 'center';
 							} elseif ($value == 'type_duration') {
 								if (!empty($obj->{$value}) && array_key_exists($obj->{$value}, $TDurationTypes)) {
 									$valuetoshow = $TDurationTypes[$obj->{$value}];
@@ -2943,6 +2965,21 @@ function dictFieldList($fieldlist, $obj = null, $tabname = '', $context = '')
 			}
 			print '<td>';
 			print $form->selectarray($value, $tmparray, (!empty($obj->{$value}) ? $obj->{$value} : ''), 0, 0, 0, '', 0, 0, 0, '', 'maxwidth250');
+			print '</td>';
+		} elseif ($value == 'capacity_mode' && $tabname == 'c_type_resource') {
+			print '<td>';
+			$capacityModes = array(
+				'none' => $langs->trans('ResourceCapacityModeNone'),
+				'users' => $langs->trans('ResourceCapacityModeUsers'),
+				'volume' => $langs->trans('ResourceCapacityModeVolume'),
+				'custom' => $langs->trans('ResourceCapacityModeCustom'),
+			);
+			$selectedCapacityMode = isset($obj->{$value}) ? $obj->{$value} : 'none';
+			print $form->selectarray($value, $capacityModes, $selectedCapacityMode, 0, 0, 0, '', 0, 0, 0, '', 'minwidth150');
+			print '</td>';
+		} elseif ($value == 'supports_cooldown' && $tabname == 'c_type_resource') {
+			print '<td class="center">';
+			print $form->selectyesno($value, isset($obj->{$value}) ? $obj->{$value} : 0, 1);
 			print '</td>';
 		} elseif (in_array($value, array('public', 'use_default'))) {
 			// Fields 0/1 with a combo select Yes/No
