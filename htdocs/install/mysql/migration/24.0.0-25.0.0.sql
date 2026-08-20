@@ -85,6 +85,7 @@ UPDATE llx_supplier_proposaldet SET subprice_ttc = 0 WHERE subprice_ttc <> 0 AND
 
 -- Resource characteristics and type capabilities
 ALTER TABLE llx_resource ADD COLUMN allow_overflow smallint NOT NULL DEFAULT 0;
+ALTER TABLE llx_resource ADD COLUMN available_units integer NOT NULL DEFAULT 1 AFTER max_users;
 -- VMYSQL4.1 ALTER TABLE llx_resource MODIFY COLUMN fk_statut smallint NOT NULL DEFAULT 1;
 -- VPGSQL8.2 ALTER TABLE llx_resource ALTER COLUMN fk_statut SET DEFAULT 1;
 ALTER TABLE llx_c_type_resource ADD COLUMN capacity_mode varchar(16) NOT NULL DEFAULT 'none';
@@ -123,5 +124,90 @@ ALTER TABLE llx_element_resources ADD COLUMN required_location varchar(255) DEFA
 ALTER TABLE llx_element_resources ADD COLUMN selection_policy varchar(24) NOT NULL DEFAULT 'preference_order';
 UPDATE llx_element_resources SET requirement_group = 'legacy_default', mandatory = 1 WHERE element_type IN ('product', 'service');
 ALTER TABLE llx_element_resources ADD INDEX idx_element_resources_requirement (element_type, element_id, relation_kind, position);
+
+-- Common resource reservation ledger
+ALTER TABLE llx_bookcal_calendar ADD COLUMN timezone varchar(64) NOT NULL DEFAULT 'UTC';
+ALTER TABLE llx_element_resources ADD COLUMN service_quantity real DEFAULT NULL;
+ALTER TABLE llx_element_resources ADD COLUMN service_duration varchar(16) DEFAULT NULL;
+ALTER TABLE llx_element_resources ADD COLUMN capacity_used real DEFAULT NULL;
+ALTER TABLE llx_element_resources ADD COLUMN resource_units_used integer DEFAULT NULL AFTER capacity_used;
+ALTER TABLE llx_element_resources ADD COLUMN load_volume_used real DEFAULT NULL;
+ALTER TABLE llx_element_resources ADD COLUMN payload_weight_used real DEFAULT NULL;
+ALTER TABLE llx_element_resources ADD COLUMN date_start datetime DEFAULT NULL;
+ALTER TABLE llx_element_resources ADD COLUMN date_end datetime DEFAULT NULL;
+ALTER TABLE llx_element_resources ADD COLUMN reservation_status varchar(16) DEFAULT NULL;
+UPDATE llx_element_resources SET relation_kind = 'assignment' WHERE reservation_status IS NOT NULL;
+ALTER TABLE llx_element_resources ADD INDEX idx_element_resources_booking (resource_type, resource_id, relation_kind, reservation_status, date_start, date_end);
+
+CREATE TABLE llx_resource_time_slot
+(
+  rowid integer AUTO_INCREMENT PRIMARY KEY,
+  entity integer DEFAULT 1 NOT NULL,
+  fk_resource integer NOT NULL,
+  label varchar(255) DEFAULT NULL,
+  slot_type varchar(16) NOT NULL DEFAULT 'absolute',
+  availability_status varchar(16) NOT NULL DEFAULT 'available',
+  date_start datetime DEFAULT NULL,
+  date_end datetime DEFAULT NULL,
+  weekday smallint DEFAULT NULL,
+  time_start integer DEFAULT NULL,
+  time_end integer DEFAULT NULL,
+  capacity real DEFAULT NULL,
+  active smallint NOT NULL DEFAULT 1,
+  fk_user_create integer DEFAULT NULL,
+  fk_user_modif integer DEFAULT NULL,
+  date_creation datetime DEFAULT NULL,
+  tms timestamp DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+) ENGINE=innodb;
+ALTER TABLE llx_resource_time_slot ADD INDEX idx_resource_time_slot_resource (fk_resource);
+ALTER TABLE llx_resource_time_slot ADD INDEX idx_resource_time_slot_absolute (fk_resource, active, date_start, date_end);
+ALTER TABLE llx_resource_time_slot ADD INDEX idx_resource_time_slot_weekly (fk_resource, active, weekday, time_start, time_end);
+
+CREATE TABLE llx_resource_time_mask
+(
+  rowid integer AUTO_INCREMENT PRIMARY KEY,
+  entity integer DEFAULT 1 NOT NULL,
+  ref varchar(128) NOT NULL,
+  label varchar(255) NOT NULL,
+  timezone varchar(64) DEFAULT NULL,
+  active smallint NOT NULL DEFAULT 1,
+  fk_user_create integer DEFAULT NULL,
+  fk_user_modif integer DEFAULT NULL,
+  date_creation datetime DEFAULT NULL,
+  tms timestamp DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+) ENGINE=innodb;
+ALTER TABLE llx_resource_time_mask ADD UNIQUE INDEX uk_resource_time_mask_ref (entity, ref);
+ALTER TABLE llx_resource_time_mask ADD INDEX idx_resource_time_mask_active (entity, active);
+
+CREATE TABLE llx_resource_time_mask_range
+(
+  rowid integer AUTO_INCREMENT PRIMARY KEY,
+  fk_time_mask integer NOT NULL,
+  label varchar(255) DEFAULT NULL,
+  weekday_mask integer NOT NULL DEFAULT 127,
+  start_day_offset smallint NOT NULL DEFAULT 0,
+  start_time integer NOT NULL DEFAULT 0,
+  end_day_offset smallint NOT NULL DEFAULT 0,
+  end_time integer NOT NULL DEFAULT 86399,
+  slot_duration integer NOT NULL DEFAULT 15,
+  active smallint NOT NULL DEFAULT 1,
+  position integer NOT NULL DEFAULT 0,
+  tms timestamp DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+) ENGINE=innodb;
+ALTER TABLE llx_resource_time_mask_range ADD INDEX idx_resource_time_mask_range_mask (fk_time_mask, active, position);
+ALTER TABLE llx_resource_time_mask_range ADD CONSTRAINT fk_resource_time_mask_range_mask FOREIGN KEY (fk_time_mask) REFERENCES llx_resource_time_mask (rowid);
+
+CREATE TABLE llx_resource_time_mask_assignment
+(
+  rowid integer AUTO_INCREMENT PRIMARY KEY,
+  entity integer DEFAULT 1 NOT NULL,
+  fk_time_mask integer NOT NULL,
+  resource_type varchar(64) NOT NULL,
+  resource_id integer NOT NULL,
+  tms timestamp DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+) ENGINE=innodb;
+ALTER TABLE llx_resource_time_mask_assignment ADD UNIQUE INDEX uk_resource_time_mask_assignment_resource (entity, resource_type, resource_id);
+ALTER TABLE llx_resource_time_mask_assignment ADD INDEX idx_resource_time_mask_assignment_mask (fk_time_mask);
+ALTER TABLE llx_resource_time_mask_assignment ADD CONSTRAINT fk_resource_time_mask_assignment_mask FOREIGN KEY (fk_time_mask) REFERENCES llx_resource_time_mask (rowid);
 
 -- end of migration

@@ -71,6 +71,11 @@ class Dolresource extends CommonObject
 	public $max_users;
 
 	/**
+	 * @var int Number of interchangeable units represented by this resource
+	 */
+	public $available_units = 1;
+
+	/**
 	 * @var int<0,1> Allow capacity exceeding a resource to spill over to the next preferred resource
 	 */
 	public $allow_overflow = 0;
@@ -267,6 +272,7 @@ class Dolresource extends CommonObject
 		$error = 0;
 		$this->date_creation = dol_now();
 		$this->applyTypeCapabilities();
+		$this->available_units = max(1, (int) $this->available_units);
 
 		// Clean parameters
 		$new_resource_values = [
@@ -318,6 +324,7 @@ class Dolresource extends CommonObject
 		$sql .= "fk_code_type_resource,";
 		$sql .= "note_public,";
 		$sql .= "note_private,";
+		$sql .= "available_units,";
 		$sql .= "fk_statut, ";
 		$sql .= "datec, ";
 		$sql .= "fk_user_author ";
@@ -337,6 +344,7 @@ class Dolresource extends CommonObject
 				$sql .= " " . (!empty($value) ? "'" . $this->db->escape($value) . "'" : 'NULL') . ",";
 			}
 		}
+		$sql .= " ".max(1, (int) $this->available_units).",";
 		$sql .= " ".((int) $this->status).",";
 		$sql .= " '" . $this->db->idate($this->date_creation) . "',";
 		$sql .= " " . (!empty($user->id) ? ((int) $user->id) : "null");
@@ -410,6 +418,7 @@ class Dolresource extends CommonObject
 		$sql .= " t.phone,";
 		$sql .= " t.email,";
 		$sql .= " t.max_users,";
+		$sql .= " t.available_units,";
 		$sql .= " t.allow_overflow,";
 		$sql .= " t.metric_value,";
 		$sql .= " t.max_payload_weight,";
@@ -450,6 +459,7 @@ class Dolresource extends CommonObject
 				$this->phone = $obj->phone;
 				$this->email = $obj->email;
 				$this->max_users = $obj->max_users;
+				$this->available_units = max(1, (int) $obj->available_units);
 				$this->allow_overflow = (int) $obj->allow_overflow;
 				$this->metric_value = isset($obj->metric_value) ? (float) $obj->metric_value : null;
 				$this->max_payload_weight = isset($obj->max_payload_weight) ? (float) $obj->max_payload_weight : null;
@@ -496,6 +506,7 @@ class Dolresource extends CommonObject
 		$error = 0;
 		$this->date_modification = dol_now();
 		$this->applyTypeCapabilities();
+		$this->available_units = max(1, (int) $this->available_units);
 
 		// Clean parameters
 		if (isset($this->ref)) {
@@ -558,6 +569,7 @@ class Dolresource extends CommonObject
 		$sql .= " phone=".(isset($this->phone) ? "'".$this->db->escape($this->phone)."'" : "null").",";
 		$sql .= " email=".(isset($this->email) ? "'".$this->db->escape($this->email)."'" : "null").",";
 		$sql .= " max_users=".(isset($this->max_users) ? (int) $this->max_users : "null").",";
+		$sql .= " available_units=".((int) $this->available_units).",";
 		$sql .= " allow_overflow=".(!empty($this->allow_overflow) ? 1 : 0).",";
 		$sql .= " metric_value=".(isset($this->metric_value) ? price2num($this->metric_value, 'MS') : "null").",";
 		$sql .= " max_payload_weight=".(isset($this->max_payload_weight) ? price2num($this->max_payload_weight, 'MS') : "null").",";
@@ -832,6 +844,7 @@ class Dolresource extends CommonObject
 		$sql .= " t.phone,";
 		$sql .= " t.email,";
 		$sql .= " t.max_users,";
+		$sql .= " t.available_units,";
 		$sql .= " t.allow_overflow,";
 		$sql .= " t.url,";
 		$sql .= " t.fk_code_type_resource,";
@@ -898,6 +911,7 @@ class Dolresource extends CommonObject
 					$this->phone = $obj->phone;
 					$this->email = $obj->email;
 					$line->max_users = $obj->max_users;
+					$line->available_units = max(1, (int) $obj->available_units);
 					$line->allow_overflow = (int) $obj->allow_overflow;
 					$this->url = $obj->url;
 					$line->fk_code_type_resource = $obj->fk_code_type_resource;

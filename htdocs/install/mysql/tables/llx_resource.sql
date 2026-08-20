@@ -29,6 +29,7 @@ CREATE TABLE llx_resource
   town                  varchar(50)     DEFAULT NULL,
   photo_filename        varchar(255)    DEFAULT NULL,
   max_users             integer         DEFAULT NULL,
+  available_units       integer         NOT NULL DEFAULT 1,
   allow_overflow        smallint        NOT NULL DEFAULT 0,
 	metric_value          real            DEFAULT NULL,
 	max_payload_weight    real            DEFAULT NULL,

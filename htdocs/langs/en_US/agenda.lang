@@ -215,6 +215,7 @@ RecurringEvent=Recurring event
 EventPartOfARecurringSerie=Event is part of a recurring series with ID %s
 BookCalSystem=Online booking
 BookCalInitHelp=To start, go into menu to create a new Calendar with availabilities...
+BookCalSlotNoLongerAvailable=This time slot is no longer available. Please select another one.
 PublicLinkForBooking=Public link for booking
 STOCKTRANSFER_CLOSEInDolibarr=Stock transfer %s completed.
 STOCKTRANSFER_VALIDATEInDolibarr=Stock transfer %s validated.

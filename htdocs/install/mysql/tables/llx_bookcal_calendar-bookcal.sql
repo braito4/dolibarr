@@ -20,6 +20,7 @@ CREATE TABLE llx_bookcal_calendar(
 	entity integer DEFAULT 1 NOT NULL,
 	ref varchar(128) NOT NULL,
 	label varchar(255),
+	timezone varchar(64) NOT NULL DEFAULT 'UTC',
 	fk_soc integer,
 	fk_project integer,
 	description text,

@@ -460,6 +460,14 @@ class modBookCal extends DolibarrModules
 		if ($result < 0) {
 			return -1; // Do not activate module if error 'not allowed' returned when loading module SQL queries (the _load_table run sql with run_sql with the error allowed parameter set to 'default')
 		}
+		$tableName = MAIN_DB_PREFIX.'bookcal_calendar';
+		$fieldResult = $this->db->DDLDescTable($tableName, 'timezone');
+		if (!$fieldResult || $this->db->num_rows($fieldResult) === 0) {
+			$fieldDescription = array('type' => 'varchar', 'value' => '64', 'null' => 'NOT NULL', 'default' => 'UTC');
+			if ($this->db->DDLAddField($tableName, 'timezone', $fieldDescription, 'after label') < 0) {
+				return -1;
+			}
+		}
 
 		// Permissions
 		$this->remove($options);

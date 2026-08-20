@@ -1,0 +1,817 @@
+<?php
+/* Copyright (C) 2026 Dolibarr contributors */
+
+require_once DOL_DOCUMENT_ROOT.'/resource/class/resourcerequirementmanager.class.php';
+require_once DOL_DOCUMENT_ROOT.'/resource/class/resourcetimemaskprovider.class.php';
+
+/**
+ * \file resource/class/resourcereservationmanager.class.php
+ * \ingroup resource
+ * \brief Preview and apply resource reservation reassignment.
+ */
+
+/**
+ * Manage the impact of manual resource availability changes.
+ */
+class ResourceReservationManager extends ResourceRequirementManager
+{
+	const STATUS_PROVISIONAL = 'provisional';
+	const STATUS_CONFIRMED = 'confirmed';
+	const STATUS_CANCELED = 'canceled';
+	const STATUS_UNAVAILABLE = 'unavailable';
+
+	/** @var DoliDB */
+	protected $db;
+
+	/** @param DoliDB $db Database handler */
+	public function __construct($db)
+	{
+		parent::__construct($db);
+		$this->db = $db;
+	}
+
+	/**
+	 * Calculate occupied minutes from requirement metadata.
+	 *
+	 * @param array<string,mixed> $requirement Requirement row
+	 * @param float $quantity Sold or produced quantity
+	 * @return int
+	 */
+	public function calculateDuration(array $requirement, $quantity)
+	{
+		return (int) (max(0, (int) $requirement['setup_duration'])
+			+ max(0, (int) $requirement['duration_base'])
+			+ (max(0, (int) $requirement['duration_per_unit']) * abs((float) $quantity))
+			+ max(0, (int) $requirement['cleanup_duration']));
+	}
+
+	/**
+	 * @param string $duration Dolibarr duration such as 30i, 2h or 1d
+	 * @return int Minutes
+	 */
+	public function durationStringToMinutes($duration)
+	{
+		if (!preg_match('/^([0-9]+)([a-z])$/i', (string) $duration, $matches)) {
+			return 0;
+		}
+		require_once DOL_DOCUMENT_ROOT.'/core/lib/date.lib.php';
+		return (int) round(convertDurationtoHour((int) $matches[1], strtolower($matches[2])) * 60);
+	}
+
+	/**
+	 * Calculate the volume of every product line in the same commercial document.
+	 *
+	 * Volumes are normalized to cubic metres, consistently with
+	 * CommonObject::getTotalWeightVolume().
+	 *
+	 * @param string $elementType propaldet, commandedet or contratdet
+	 * @param int    $parentId    Proposal, order or contract id
+	 * @return float Volume in cubic metres
+	 */
+	public function calculateDocumentProductVolume($elementType, $parentId)
+	{
+		if ($parentId <= 0) {
+			return 0.0;
+		}
+
+		if ($elementType === 'propaldet') {
+			$sql = 'SELECT d.qty, p.volume, p.volume_units FROM '.MAIN_DB_PREFIX.'propaldet d';
+			$sql .= ' INNER JOIN '.MAIN_DB_PREFIX.'product p ON p.rowid = d.fk_product';
+			$sql .= ' WHERE d.fk_propal = '.((int) $parentId);
+		} elseif ($elementType === 'commandedet') {
+			$sql = 'SELECT d.qty, p.volume, p.volume_units FROM '.MAIN_DB_PREFIX.'commandedet d';
+			$sql .= ' INNER JOIN '.MAIN_DB_PREFIX.'product p ON p.rowid = d.fk_product';
+			$sql .= ' WHERE d.fk_commande = '.((int) $parentId);
+		} elseif ($elementType === 'contratdet') {
+			$sql = 'SELECT d.qty, p.volume, p.volume_units FROM '.MAIN_DB_PREFIX.'contratdet d';
+			$sql .= ' INNER JOIN '.MAIN_DB_PREFIX.'product p ON p.rowid = d.fk_product';
+			$sql .= ' WHERE d.fk_contrat = '.((int) $parentId);
+		} else {
+			return 0.0;
+		}
+		$sql .= ' AND d.product_type = 0';
+		$resql = $this->db->query($sql);
+		$totalVolume = 0.0;
+		while ($resql && ($productLine = $this->db->fetch_object($resql))) {
+			$unitFactor = (int) $productLine->volume_units < 50 ? pow(10, (int) $productLine->volume_units) : 1.0;
+			$totalVolume += abs((float) $productLine->qty) * (float) $productLine->volume * $unitFactor;
+		}
+
+		return $totalVolume;
+	}
+
+	/**
+	 * Calculate the payload weight of every product line in a document.
+	 *
+	 * @param string $elementType propaldet, commandedet or contratdet
+	 * @param int    $parentId    Proposal, order or contract id
+	 * @return float Weight in kilograms
+	 */
+	public function calculateDocumentProductWeight($elementType, $parentId)
+	{
+		if ($parentId <= 0) {
+			return 0.0;
+		}
+		if ($elementType === 'propaldet') {
+			$sql = 'SELECT d.qty, p.weight, p.weight_units FROM '.MAIN_DB_PREFIX.'propaldet d';
+			$sql .= ' INNER JOIN '.MAIN_DB_PREFIX.'product p ON p.rowid = d.fk_product WHERE d.fk_propal = '.((int) $parentId);
+		} elseif ($elementType === 'commandedet') {
+			$sql = 'SELECT d.qty, p.weight, p.weight_units FROM '.MAIN_DB_PREFIX.'commandedet d';
+			$sql .= ' INNER JOIN '.MAIN_DB_PREFIX.'product p ON p.rowid = d.fk_product WHERE d.fk_commande = '.((int) $parentId);
+		} elseif ($elementType === 'contratdet') {
+			$sql = 'SELECT d.qty, p.weight, p.weight_units FROM '.MAIN_DB_PREFIX.'contratdet d';
+			$sql .= ' INNER JOIN '.MAIN_DB_PREFIX.'product p ON p.rowid = d.fk_product WHERE d.fk_contrat = '.((int) $parentId);
+		} else {
+			return 0.0;
+		}
+		$sql .= ' AND d.product_type = 0';
+		$resql = $this->db->query($sql);
+		$totalWeight = 0.0;
+		while ($resql && ($productLine = $this->db->fetch_object($resql))) {
+			$unitFactor = (int) $productLine->weight_units < 50 ? pow(10, (int) $productLine->weight_units) : 1.0;
+			$totalWeight += abs((float) $productLine->qty) * (float) $productLine->weight * $unitFactor;
+		}
+		return $totalWeight;
+	}
+
+	/**
+	 * Find the first available interval for a resource.
+	 *
+	 * Resource time-slot rules are optional. With no rules, the resource is
+	 * considered continuously open. The search uses 15-minute boundaries.
+	 *
+	 * @param string $resourceType Resource type
+	 * @param int $resourceId Resource id
+	 * @param int $earliestStart Earliest timestamp
+	 * @param int $latestEnd Latest timestamp
+	 * @param int $durationMinutes Required duration
+	 * @param float $capacity Required capacity
+	 * @param float|null $maximumCapacity Explicit capacity
+	 * @return array{date_start:string,date_end:string}|null
+	 */
+	public function findNextAvailable($resourceType, $resourceId, $earliestStart, $latestEnd, $durationMinutes, $capacity = 1.0, $maximumCapacity = null)
+	{
+		if ($durationMinutes <= 0 || $earliestStart <= 0 || $latestEnd <= $earliestStart) {
+			return null;
+		}
+		$rules = array();
+		$maskProvider = new ResourceTimeMaskProvider($this->db);
+		$hasTimeMask = $maskProvider->hasMask($resourceType, $resourceId);
+		$maskRangesByDay = array();
+		$maskTimezone = $maskProvider->getTimezone($resourceType, $resourceId, 'UTC');
+		if ($resourceType === 'dolresource') {
+			if (!$hasTimeMask) {
+				$sql = 'SELECT slot_type, availability_status, date_start, date_end, weekday, time_start, time_end';
+				$sql .= ' FROM '.MAIN_DB_PREFIX.'resource_time_slot';
+				$sql .= ' WHERE fk_resource = '.((int) $resourceId).' AND active = 1';
+				$resql = $this->db->query($sql);
+				while ($resql && ($rule = $this->db->fetch_array($resql))) {
+					$rules[] = $rule;
+				}
+			}
+			if ($maximumCapacity === null) {
+				$sql = 'SELECT r.max_users, r.metric_value, r.fk_statut, ty.capacity_mode FROM '.MAIN_DB_PREFIX.'resource r';
+				$sql .= ' LEFT JOIN '.MAIN_DB_PREFIX.'c_type_resource ty ON ty.code = r.fk_code_type_resource';
+				$sql .= ' WHERE r.rowid = '.((int) $resourceId);
+				$resource = $this->db->fetch_object($this->db->query($sql));
+				if (!$resource || (int) $resource->fk_statut !== 1) {
+					return null;
+				}
+				$maximumCapacity = $this->getResourceMaximumCapacity($resource);
+			}
+		}
+		if ($maximumCapacity === null) {
+			$maximumCapacity = 1.0;
+		}
+		$assignments = $this->loadConfirmedAssignments($resourceType, array($resourceId), $this->db->idate($earliestStart), $this->db->idate($latestEnd));
+		$cursor = (int) (ceil($earliestStart / 900) * 900);
+		$durationSeconds = $durationMinutes * 60;
+		while ($cursor + $durationSeconds <= $latestEnd) {
+			$end = $cursor + $durationSeconds;
+			$occupied = $this->getOccupiedCapacityFromAssignments($assignments, $resourceId, $this->db->idate($cursor), $this->db->idate($end));
+			$matchesCalendar = $this->matchesOpeningRule($cursor, $end, $rules);
+			if ($hasTimeMask) {
+				$dayKey = (new DateTimeImmutable('@'.$cursor))->setTimezone(new DateTimeZone($maskTimezone))->format('Y-m-d');
+				if (!isset($maskRangesByDay[$dayKey])) {
+					$maskRangesByDay[$dayKey] = $maskProvider->getRangesForLocalDay($resourceType, $resourceId, $dayKey, $maskTimezone);
+				}
+				$matchesCalendar = $this->matchesExpandedMaskRange($cursor, $end, $maskRangesByDay[$dayKey]);
+			}
+			if ($matchesCalendar && ($occupied + $capacity) <= $maximumCapacity) {
+				return array('date_start' => $this->db->idate($cursor), 'date_end' => $this->db->idate($end));
+			}
+			$cursor += 900;
+		}
+		return null;
+	}
+
+	/**
+	 * Check whether an interval is contained in an expanded reusable mask range.
+	 *
+	 * @param int                                             $start  Start timestamp
+	 * @param int                                             $end    End timestamp
+	 * @param array<int,array{start:int,end:int,slot_duration:int}> $ranges Expanded ranges
+	 * @return bool
+	 */
+	private function matchesExpandedMaskRange($start, $end, array $ranges)
+	{
+		foreach ($ranges as $range) {
+			if ($start >= $range['start'] && $end <= $range['end']) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	/**
+	 * @param int                            $start Start timestamp
+	 * @param int                            $end   End timestamp
+	 * @param array<int,array<string,mixed>> $rules Opening rules
+	 * @return bool
+	 */
+	private function matchesOpeningRule($start, $end, array $rules)
+	{
+		if (empty($rules)) {
+			return true;
+		}
+		$date = dol_getdate($start);
+		$dayStart = dol_mktime(0, 0, 0, $date['mon'], $date['mday'], $date['year'], 'tzuserrel');
+		$weekday = (int) date('N', $start);
+		$hasAvailabilityRule = false;
+		foreach ($rules as $rule) {
+			$status = !empty($rule['availability_status']) ? $rule['availability_status'] : 'available';
+			if ($status === 'available') {
+				$hasAvailabilityRule = true;
+				continue;
+			}
+			if ($rule['slot_type'] === 'absolute') {
+				$ruleStart = $this->db->jdate($rule['date_start']);
+				$ruleEnd = $this->db->jdate($rule['date_end']);
+				if ($start < $ruleEnd && $end > $ruleStart) {
+					return false;
+				}
+			} elseif ($rule['slot_type'] === 'weekly' && (int) $rule['weekday'] === $weekday
+				&& $start < $dayStart + (int) $rule['time_end'] && $end > $dayStart + (int) $rule['time_start']) {
+				return false;
+			}
+		}
+		if (!$hasAvailabilityRule) {
+			return true;
+		}
+		foreach ($rules as $rule) {
+			if ((!empty($rule['availability_status']) ? $rule['availability_status'] : 'available') !== 'available') {
+				continue;
+			}
+			if ($rule['slot_type'] === 'absolute') {
+				$ruleStart = $this->db->jdate($rule['date_start']);
+				$ruleEnd = $this->db->jdate($rule['date_end']);
+				if ($start >= $ruleStart && $end <= $ruleEnd) {
+					return true;
+				}
+			} elseif ($rule['slot_type'] === 'weekly' && (int) $rule['weekday'] === $weekday) {
+				if ($start >= $dayStart + (int) $rule['time_start'] && $end <= $dayStart + (int) $rule['time_end']) {
+					return true;
+				}
+			}
+		}
+		return false;
+	}
+
+	/**
+	 * Return occupied capacity for a half-open interval [start, end).
+	 *
+	 * @param string $resourceType Resource type
+	 * @param int $resourceId Resource id
+	 * @param string $dateStart Database date start
+	 * @param string $dateEnd Database date end
+	 * @param int $excludeRowId Assignment to ignore
+	 * @return float
+	 */
+	public function getOccupiedCapacity($resourceType, $resourceId, $dateStart, $dateEnd, $excludeRowId = 0)
+	{
+		$sql = 'SELECT COALESCE(SUM(CASE WHEN capacity_used IS NULL THEN 1 ELSE capacity_used END), 0) as occupied';
+		$sql .= ' FROM '.MAIN_DB_PREFIX.'element_resources';
+		$sql .= ' WHERE resource_id = '.((int) $resourceId);
+		$sql .= " AND resource_type = '".$this->db->escape($resourceType)."'";
+		$sql .= " AND reservation_status = 'confirmed'";
+		$sql .= " AND (relation_kind = 'assignment' OR relation_kind IS NULL)";
+		$sql .= " AND (date_end IS NULL OR date_end > '".$this->db->escape($dateStart)."')";
+		$sql .= " AND (date_start IS NULL OR date_start < '".$this->db->escape($dateEnd)."')";
+		if ($excludeRowId > 0) {
+			$sql .= ' AND rowid <> '.((int) $excludeRowId);
+		}
+		$resql = $this->db->query($sql);
+		$obj = $resql ? $this->db->fetch_object($resql) : null;
+		return $obj ? (float) $obj->occupied : 0.0;
+	}
+
+	/**
+	 * Return the number of overlapping homogeneous resource units in use.
+	 *
+	 * @param string $resourceType Resource type
+	 * @param int    $resourceId   Resource id
+	 * @param string $dateStart    Database date start
+	 * @param string $dateEnd      Database date end
+	 * @return int
+	 */
+	public function getOccupiedResourceUnits($resourceType, $resourceId, $dateStart, $dateEnd)
+	{
+		$sql = 'SELECT COALESCE(SUM(CASE WHEN resource_units_used IS NULL THEN 1 ELSE resource_units_used END), 0) as occupied';
+		$sql .= ' FROM '.MAIN_DB_PREFIX.'element_resources';
+		$sql .= ' WHERE resource_id = '.((int) $resourceId);
+		$sql .= " AND resource_type = '".$this->db->escape($resourceType)."'";
+		$sql .= " AND reservation_status = 'confirmed'";
+		$sql .= " AND (relation_kind = 'assignment' OR relation_kind IS NULL)";
+		$sql .= " AND (date_end IS NULL OR date_end > '".$this->db->escape($dateStart)."')";
+		$sql .= " AND (date_start IS NULL OR date_start < '".$this->db->escape($dateEnd)."')";
+		$resql = $this->db->query($sql);
+		$obj = $resql ? $this->db->fetch_object($resql) : null;
+		return $obj ? (int) $obj->occupied : 0;
+	}
+
+	/**
+	 * Load confirmed assignments for many resources using one future-bounded query.
+	 *
+	 * @param string     $resourceType Resource type
+	 * @param array<int> $resourceIds  Resource ids
+	 * @param string     $dateStart    Earliest requested date
+	 * @param string     $dateEnd      Latest requested date
+	 * @return array<int,array<int,array{date_start:?string,date_end:?string,capacity:float,units:int}>>
+	 */
+	public function loadConfirmedAssignments($resourceType, array $resourceIds, $dateStart, $dateEnd)
+	{
+		$resourceIds = array_values(array_unique(array_filter(array_map('intval', $resourceIds))));
+		$assignments = array();
+		if (empty($resourceIds) || empty($dateStart) || empty($dateEnd) || $dateStart >= $dateEnd) {
+			return $assignments;
+		}
+		$sqlResourceIds = $this->db->sanitize(implode(',', $resourceIds));
+		$sql = 'SELECT resource_id, date_start, date_end, capacity_used, resource_units_used FROM '.MAIN_DB_PREFIX.'element_resources';
+		$sql .= ' WHERE resource_id IN ('.$sqlResourceIds.')';
+		$sql .= " AND resource_type = '".$this->db->escape($resourceType)."'";
+		$sql .= " AND reservation_status = 'confirmed'";
+		$sql .= " AND (relation_kind = 'assignment' OR relation_kind IS NULL)";
+		$sql .= " AND (date_end IS NULL OR date_end > '".$this->db->escape($dateStart)."')";
+		$sql .= " AND (date_start IS NULL OR date_start < '".$this->db->escape($dateEnd)."')";
+		$resql = $this->db->query($sql);
+		while ($resql && ($row = $this->db->fetch_object($resql))) {
+			$assignments[(int) $row->resource_id][] = array(
+				'date_start' => $row->date_start,
+				'date_end' => $row->date_end,
+				'capacity' => $row->capacity_used === null ? 1.0 : (float) $row->capacity_used,
+				'units' => $row->resource_units_used === null ? 1 : max(1, (int) $row->resource_units_used),
+			);
+		}
+		return $assignments;
+	}
+
+	/**
+	 * Sum overlapping homogeneous resource units from a loaded assignment index.
+	 *
+	 * @param array<int,array<int,array{date_start:?string,date_end:?string,capacity:float,units:int}>> $assignments Assignment index
+	 * @param int    $resourceId Resource id
+	 * @param string $dateStart  Requested start
+	 * @param string $dateEnd    Requested end
+	 * @return int
+	 */
+	public function getOccupiedResourceUnitsFromAssignments(array $assignments, $resourceId, $dateStart, $dateEnd)
+	{
+		$occupied = 0;
+		foreach ($assignments[(int) $resourceId] ?? array() as $assignment) {
+			if (($assignment['date_end'] === null || $assignment['date_end'] > $dateStart)
+				&& ($assignment['date_start'] === null || $assignment['date_start'] < $dateEnd)) {
+				$occupied += $assignment['units'];
+			}
+		}
+		return $occupied;
+	}
+
+	/**
+	 * Sum overlapping capacity from a previously loaded assignment index.
+	 *
+	 * @param array<int,array<int,array{date_start:?string,date_end:?string,capacity:float,units:int}>> $assignments Assignment index
+	 * @param int    $resourceId Resource id
+	 * @param string $dateStart  Requested start
+	 * @param string $dateEnd    Requested end
+	 * @return float
+	 */
+	public function getOccupiedCapacityFromAssignments(array $assignments, $resourceId, $dateStart, $dateEnd)
+	{
+		$occupied = 0.0;
+		foreach ($assignments[(int) $resourceId] ?? array() as $assignment) {
+			if (($assignment['date_end'] === null || $assignment['date_end'] > $dateStart)
+				&& ($assignment['date_start'] === null || $assignment['date_start'] < $dateEnd)) {
+				$occupied += $assignment['capacity'];
+			}
+		}
+		return $occupied;
+	}
+
+	/**
+	 * Check a resource capacity using the common assignment ledger.
+	 *
+	 * @param string $resourceType Resource type
+	 * @param int $resourceId Resource id
+	 * @param string $dateStart Database date start
+	 * @param string $dateEnd Database date end
+	 * @param float $requiredCapacity Requested capacity
+	 * @param float|null $maximumCapacity Explicit capacity for virtual resources
+	 * @param int $requiredUnits Number of homogeneous units required
+	 * @param int|null $availableUnits Number of homogeneous units available
+	 * @return bool
+	 */
+	public function canReserve($resourceType, $resourceId, $dateStart, $dateEnd, $requiredCapacity = 1.0, $maximumCapacity = null, $requiredUnits = 1, $availableUnits = null)
+	{
+		$requiredUnits = max(1, (int) $requiredUnits);
+		if (empty($dateStart) || empty($dateEnd) || $dateStart >= $dateEnd || $requiredCapacity <= 0) {
+			return false;
+		}
+		if ($maximumCapacity === null && $resourceType === 'dolresource') {
+			$sql = 'SELECT r.max_users, r.metric_value, r.available_units, r.fk_statut, ty.capacity_mode FROM '.MAIN_DB_PREFIX.'resource r';
+			$sql .= ' LEFT JOIN '.MAIN_DB_PREFIX.'c_type_resource ty ON ty.code = r.fk_code_type_resource';
+			$sql .= ' WHERE r.rowid = '.((int) $resourceId);
+			$obj = $this->db->fetch_object($this->db->query($sql));
+			if (!$obj || (int) $obj->fk_statut !== 1) {
+				return false;
+			}
+			$availableUnits = max(1, (int) $obj->available_units);
+			$maximumCapacity = $this->getResourceMaximumCapacity($obj) * $availableUnits;
+		}
+		if ($maximumCapacity === null) {
+			$maximumCapacity = 1.0;
+		}
+		if ($maximumCapacity <= 0 || $requiredCapacity > $maximumCapacity) {
+			return false;
+		}
+		if ($availableUnits !== null && ($this->getOccupiedResourceUnits($resourceType, $resourceId, $dateStart, $dateEnd) + $requiredUnits) > $availableUnits) {
+			return false;
+		}
+		return ($this->getOccupiedCapacity($resourceType, $resourceId, $dateStart, $dateEnd) + $requiredCapacity) <= $maximumCapacity;
+	}
+
+	/**
+	 * Create one assignment after rechecking capacity.
+	 *
+	 * @param array<string,mixed> $assignment Normalized assignment
+	 * @param User $user Current user
+	 * @return int Assignment id, -1 on conflict or database error
+	 */
+	public function createAssignment(array $assignment, User $user)
+	{
+		$resourceType = $assignment['resource_type'];
+		$resourceId = (int) $assignment['resource_id'];
+		$capacity = isset($assignment['capacity_used']) ? (float) $assignment['capacity_used'] : 1.0;
+		$resourceUnits = max(1, (int) (isset($assignment['resource_units_used']) ? $assignment['resource_units_used'] : 1));
+		$maximum = isset($assignment['maximum_capacity']) ? (float) $assignment['maximum_capacity'] : null;
+		$lockSql = '';
+		if ($resourceType === 'dolresource') {
+			$lockSql = 'SELECT rowid FROM '.MAIN_DB_PREFIX.'resource WHERE rowid = '.((int) $resourceId).' FOR UPDATE';
+		} elseif ($resourceType === 'bookcal_calendar') {
+			$lockSql = 'SELECT rowid FROM '.MAIN_DB_PREFIX.'bookcal_calendar WHERE rowid = '.((int) $resourceId).' FOR UPDATE';
+		}
+		if ($lockSql && !$this->db->query($lockSql)) {
+			return -1;
+		}
+		if (!$this->canReserve($resourceType, $resourceId, $assignment['date_start'], $assignment['date_end'], $capacity, $maximum, $resourceUnits)) {
+			return -1;
+		}
+		$sql = 'INSERT INTO '.MAIN_DB_PREFIX.'element_resources (';
+		$sql .= 'element_id, element_type, resource_id, resource_type, busy, mandatory, position, relation_kind, resource_role,';
+		$sql .= ' service_quantity, capacity_used, resource_units_used, date_start, date_end, reservation_status, fk_user_create';
+		$sql .= ') VALUES (';
+		$sql .= ((int) $assignment['element_id']).", '".$this->db->escape($assignment['element_type'])."', ".((int) $resourceId).", '".$this->db->escape($resourceType)."', 1, ";
+		$sql .= (!empty($assignment['mandatory']) ? 1 : 0).', '.((int) (!empty($assignment['position']) ? $assignment['position'] : 0));
+		$sql .= ", 'assignment', '".$this->db->escape(!empty($assignment['resource_role']) ? $assignment['resource_role'] : 'capacity')."', ";
+		$sql .= price2num(isset($assignment['service_quantity']) ? $assignment['service_quantity'] : 1, 'MS').', '.price2num($capacity, 'MS').', '.((int) $resourceUnits).', ';
+		$sql .= "'".$this->db->escape($assignment['date_start'])."', '".$this->db->escape($assignment['date_end'])."', '";
+		$sql .= $this->db->escape(!empty($assignment['reservation_status']) ? $assignment['reservation_status'] : self::STATUS_CONFIRMED)."', ".((int) $user->id).')';
+		if (!$this->db->query($sql)) {
+			return -1;
+		}
+		return (int) $this->db->last_insert_id(MAIN_DB_PREFIX.'element_resources');
+	}
+
+	/**
+	 * Remove assignments generated by a source element.
+	 *
+	 * @param string $elementType Source type
+	 * @param int $elementId Source id
+	 * @return int
+	 */
+	public function deleteAssignments($elementType, $elementId)
+	{
+		$sql = 'DELETE FROM '.MAIN_DB_PREFIX.'element_resources';
+		$sql .= " WHERE element_type = '".$this->db->escape($elementType)."' AND element_id = ".((int) $elementId);
+		$sql .= " AND (relation_kind = 'assignment' OR reservation_status IS NOT NULL)";
+		return $this->db->query($sql) ? 1 : -1;
+	}
+
+	/**
+	 * Preview reassignment of current and future reservations.
+	 *
+	 * @param int $resourceId Resource becoming unavailable
+	 * @return array<int,array<string,mixed>>
+	 */
+	public function previewOutOfService($resourceId)
+	{
+		$reservations = $this->fetchAffectedReservations($resourceId);
+		$planned = array();
+		foreach ($reservations as &$reservation) {
+			$reservation['replacement'] = $this->findReplacement($reservation, $planned);
+			if (!empty($reservation['replacement']) && $reservation['reservation_status'] === 'confirmed') {
+				$planned[] = array(
+					'resource_id' => $reservation['replacement']['resource_id'],
+					'capacity_used' => $reservation['replacement']['capacity_used'],
+					'date_start' => $reservation['date_start'],
+					'date_end' => $reservation['date_end'],
+				);
+			}
+		}
+		unset($reservation);
+		return $reservations;
+	}
+
+	/**
+	 * Apply a previously previewed impact.
+	 *
+	 * @param int $resourceId Resource becoming unavailable
+	 * @param array<int,array<string,mixed>> $impact Preview result
+	 * @param User|null $actor User that marks the resource out of service
+	 * @return int Number of processed reservations, -1 on error
+	 */
+	public function applyOutOfService($resourceId, array $impact, ?User $actor = null)
+	{
+		global $langs;
+		$langs->load('resource');
+		if ($actor === null && isset($GLOBALS['user']) && $GLOBALS['user'] instanceof User) {
+			$actor = $GLOBALS['user'];
+		}
+		$this->db->begin();
+		$sql = 'SELECT ref FROM '.MAIN_DB_PREFIX.'resource WHERE rowid='.((int) $resourceId);
+		$resource = $this->db->fetch_object($this->db->query($sql));
+		$resourceRef = $resource ? (string) $resource->ref : (string) $resourceId;
+		$sql = 'UPDATE '.MAIN_DB_PREFIX.'resource SET fk_statut=2 WHERE rowid='.((int) $resourceId);
+		if (!$this->db->query($sql)) {
+			$this->db->rollback();
+			return -1;
+		}
+		foreach ($impact as $reservation) {
+			if (!empty($reservation['replacement'])) {
+				$replacement = $reservation['replacement'];
+				$sql = 'UPDATE '.MAIN_DB_PREFIX.'element_resources SET';
+				$sql .= ' resource_id = '.((int) $replacement['resource_id']).',';
+				$sql .= ' position = '.((int) $replacement['position']).',';
+				$sql .= ' users_per_service_unit = '.price2num($replacement['users_per_service_unit'], 'MS').',';
+				$sql .= ' capacity_used = '.price2num($replacement['capacity_used'], 'MS');
+				$sql .= ' WHERE rowid = '.((int) $reservation['rowid']);
+			} else {
+				$sql = 'UPDATE '.MAIN_DB_PREFIX.'element_resources';
+				$sql .= " SET reservation_status = 'unavailable'";
+				$sql .= ' WHERE rowid = '.((int) $reservation['rowid']);
+			}
+			if (!$this->db->query($sql)) {
+				$this->db->rollback();
+				return -1;
+			}
+			if ($actor instanceof User && $this->createOutOfServiceAlert($resourceRef, $reservation, $actor, $langs) < 0) {
+				$this->db->rollback();
+				return -1;
+			}
+		}
+		$this->db->commit();
+		return count($impact);
+	}
+
+	/**
+	 * Reassign one reservation when its current assignment fails.
+	 *
+	 * @param int    $assignmentId Assignment id
+	 * @return int<-2,1> 1 applied, -1 on error, -2 if assignment is not affected
+	 */
+	public function replaceFailedAssignment($assignmentId)
+	{
+		$sql = 'SELECT resource_id FROM '.MAIN_DB_PREFIX.'element_resources WHERE rowid='.((int) $assignmentId);
+		$assignment = $this->db->fetch_object($this->db->query($sql));
+		if (!$assignment) {
+			return -2;
+		}
+		$affected = null;
+		foreach ($this->fetchAffectedReservations((int) $assignment->resource_id) as $reservation) {
+			if ((int) $reservation['rowid'] === (int) $assignmentId) {
+				$affected = $reservation;
+				break;
+			}
+		}
+		if ($affected === null) {
+			return -2;
+		}
+		$affected['replacement'] = $this->findReplacement($affected, array());
+		$this->db->begin();
+		if (!empty($affected['replacement'])) {
+			$replacement = $affected['replacement'];
+			$sql = 'UPDATE '.MAIN_DB_PREFIX.'element_resources SET resource_id='.((int) $replacement['resource_id']);
+			$sql .= ', position='.((int) $replacement['position']);
+			$sql .= ', users_per_service_unit='.price2num($replacement['users_per_service_unit'], 'MS');
+			$sql .= ', capacity_used='.price2num($replacement['capacity_used'], 'MS');
+			$sql .= ' WHERE rowid='.((int) $assignmentId);
+		} else {
+			$sql = 'UPDATE '.MAIN_DB_PREFIX."element_resources SET reservation_status='unavailable'";
+			$sql .= ' WHERE rowid='.((int) $assignmentId);
+		}
+		if (!$this->db->query($sql)) {
+			$this->db->rollback();
+			return -1;
+		}
+		$this->db->commit();
+		return 1;
+	}
+
+	/**
+	 * @param int $resourceId Resource id
+	 * @return array<int,array<string,mixed>>
+	 */
+	private function fetchAffectedReservations($resourceId)
+	{
+		$supplierJoin = ' LEFT JOIN (SELECT fk_product, MIN(fk_soc) as fk_soc FROM '.MAIN_DB_PREFIX.'product_fournisseur_price';
+		$supplierJoin .= ' WHERE entity IN ('.getEntity('productprice').') GROUP BY fk_product) rsp ON rsp.fk_product=prod.rowid';
+		$supplierJoin .= ' LEFT JOIN '.MAIN_DB_PREFIX.'societe supplier ON supplier.rowid=rsp.fk_soc';
+		$sql = "SELECT er.*, pd.fk_product, p.rowid as document_id, p.ref as document_ref, prod.ref as service_ref,";
+		$sql .= " rsp.fk_soc as supplier_id, supplier.nom as supplier_name, 'propal' as document_type";
+		$sql .= ' FROM '.MAIN_DB_PREFIX.'element_resources er';
+		$sql .= " INNER JOIN ".MAIN_DB_PREFIX."propaldet pd ON pd.rowid=er.element_id AND er.element_type='propaldet'";
+		$sql .= ' INNER JOIN '.MAIN_DB_PREFIX.'propal p ON p.rowid=pd.fk_propal';
+		$sql .= ' LEFT JOIN '.MAIN_DB_PREFIX.'product prod ON prod.rowid=pd.fk_product';
+		$sql .= $supplierJoin; // Fragment only contains fixed table names and an entity filter. @phan-suppress-current-line SqlInjection
+		$sql .= ' WHERE er.resource_id='.((int) $resourceId)." AND er.reservation_status NOT IN ('canceled','unavailable')";
+		$sql .= " AND (er.date_end IS NULL OR er.date_end >= '".$this->db->idate(dol_now())."')";
+		$sql .= ' UNION ALL ';
+		$sql .= "SELECT er.*, cd.fk_product, c.rowid as document_id, c.ref as document_ref, prod.ref as service_ref,";
+		$sql .= " rsp.fk_soc as supplier_id, supplier.nom as supplier_name, 'contract' as document_type";
+		$sql .= ' FROM '.MAIN_DB_PREFIX.'element_resources er';
+		$sql .= " INNER JOIN ".MAIN_DB_PREFIX."contratdet cd ON cd.rowid=er.element_id AND er.element_type='contratdet'";
+		$sql .= ' INNER JOIN '.MAIN_DB_PREFIX.'contrat c ON c.rowid=cd.fk_contrat';
+		$sql .= ' LEFT JOIN '.MAIN_DB_PREFIX.'product prod ON prod.rowid=cd.fk_product';
+		$sql .= $supplierJoin; // Fragment only contains fixed table names and an entity filter. @phan-suppress-current-line SqlInjection
+		$sql .= ' WHERE er.resource_id='.((int) $resourceId)." AND er.reservation_status='confirmed'";
+		$sql .= " AND (er.date_end IS NULL OR er.date_end >= '".$this->db->idate(dol_now())."')";
+		$sql .= ' ORDER BY date_start, rowid';
+		$resql = $this->db->query($sql);
+		$result = array();
+		if ($resql) {
+			while ($row = $this->db->fetch_array($resql)) {
+				$result[] = $row;
+			}
+		}
+		return $result;
+	}
+
+	/**
+	 * Create an agenda alert describing one reservation affected by an outage.
+	 *
+	 * @param string               $resourceRef Resource reference
+	 * @param array<string,mixed>  $reservation Affected reservation
+	 * @param User                 $user        Acting user
+	 * @param Translate            $langs       Translation handler
+	 * @return int Event id, negative on error
+	 */
+	private function createOutOfServiceAlert($resourceRef, array $reservation, User $user, Translate $langs)
+	{
+		require_once DOL_DOCUMENT_ROOT.'/comm/action/class/actioncomm.class.php';
+		$replacementRef = !empty($reservation['replacement']['ref']) ? (string) $reservation['replacement']['ref'] : '';
+		$action = new ActionComm($this->db);
+		$action->type_code = 'AC_OTH_AUTO';
+		$action->code = 'AC_RESOURCE_OUT_OF_SERVICE';
+		$action->label = $langs->trans('ResourceOutOfServiceAlert', $resourceRef, $reservation['document_ref']);
+		$action->datep = dol_now();
+		$action->datef = $action->datep;
+		$action->percentage = -1;
+		$action->socid = !empty($reservation['supplier_id']) ? (int) $reservation['supplier_id'] : 0;
+		$action->authorid = $user->id;
+		$action->userownerid = $user->id;
+		$action->fk_element = (int) $reservation['document_id'];
+		$action->elementid = (int) $reservation['document_id'];
+		$action->elementtype = (string) $reservation['document_type'];
+		$action->note_private = $this->formatLongTranslation(
+			$langs,
+			'ResourceOutOfServiceAlertDetail',
+			array(
+				$resourceRef,
+				$reservation['service_ref'],
+				$reservation['document_ref'],
+				$reservation['date_start'],
+				$reservation['date_end'],
+				!empty($reservation['supplier_name']) ? $reservation['supplier_name'] : '-',
+				$replacementRef !== '' ? $replacementRef : '-',
+			)
+		);
+		return $action->create($user);
+	}
+
+	/**
+	 * Format translations that need more parameters than Translate::trans supports.
+	 *
+	 * @param Translate           $langs      Translation handler
+	 * @param string              $key        Translation key
+	 * @param array<int,mixed>    $parameters Replacement parameters
+	 * @return string
+	 */
+	private function formatLongTranslation(Translate $langs, $key, array $parameters)
+	{
+		$format = !empty($langs->tab_translate[$key]) ? $langs->tab_translate[$key] : $key;
+		// Translation formats are loaded dynamically from trusted language files.
+		// @phan-suppress-next-line PhanPluginPrintfVariableFormatString
+		return vsprintf($format, $parameters);
+	}
+
+	/**
+	 * @param array<string,mixed>              $reservation Reservation to replace
+	 * @param array<int,array<string,mixed>>   $planned     Planned replacements
+	 * @return array<string,mixed>|null
+	 */
+	private function findReplacement(array $reservation, array $planned)
+	{
+		$sql = 'SELECT er.resource_id, er.position, er.users_per_service_unit, r.ref, r.max_users, r.metric_value, ty.capacity_mode';
+		$sql .= ' FROM '.MAIN_DB_PREFIX.'element_resources er';
+		$sql .= ' INNER JOIN '.MAIN_DB_PREFIX.'resource r ON r.rowid=er.resource_id';
+		$sql .= ' LEFT JOIN '.MAIN_DB_PREFIX.'c_type_resource ty ON ty.code=r.fk_code_type_resource';
+		$sql .= " WHERE er.element_type='product' AND er.resource_type='dolresource'";
+		$sql .= " AND (er.relation_kind IS NULL OR er.relation_kind='requirement')";
+		$sql .= ' AND er.element_id='.((int) $reservation['fk_product']);
+		$sql .= ' AND er.position>'.((int) $reservation['position']);
+		$sql .= ' AND r.fk_statut=1 ORDER BY er.position,er.rowid';
+		$resql = $this->db->query($sql);
+		if (!$resql) {
+			return null;
+		}
+		while ($candidate = $this->db->fetch_object($resql)) {
+			$capacityUsed = abs((float) $reservation['service_quantity']) * (float) $candidate->users_per_service_unit;
+			if ($reservation['reservation_status'] !== 'confirmed' || $this->candidateHasCapacity($candidate, $capacityUsed, $reservation, $planned)) {
+				return array(
+					'resource_id' => (int) $candidate->resource_id,
+					'ref' => $candidate->ref,
+					'position' => (int) $candidate->position,
+					'users_per_service_unit' => (float) $candidate->users_per_service_unit,
+					'capacity_used' => $capacityUsed,
+				);
+			}
+		}
+		return null;
+	}
+
+	/**
+	 * @param object                          $candidate   Candidate resource
+	 * @param float                           $required    Required capacity
+	 * @param array<string,mixed>              $reservation Reservation data
+	 * @param array<int,array<string,mixed>>   $planned     Planned replacements
+	 * @return bool
+	 */
+	private function candidateHasCapacity($candidate, $required, array $reservation, array $planned)
+	{
+		$maximumCapacity = $this->getResourceMaximumCapacity($candidate);
+		if ($maximumCapacity <= 0 || $required > $maximumCapacity) {
+			return false;
+		}
+		$sql = 'SELECT COALESCE(SUM(capacity_used),0) as occupied FROM '.MAIN_DB_PREFIX.'element_resources';
+		$sql .= ' WHERE resource_id='.((int) $candidate->resource_id)." AND reservation_status='confirmed'";
+		if (!empty($reservation['date_start'])) {
+			$sql .= " AND (date_end IS NULL OR date_end >= '".$this->db->escape($reservation['date_start'])."')";
+		}
+		if (!empty($reservation['date_end'])) {
+			$sql .= " AND (date_start IS NULL OR date_start <= '".$this->db->escape($reservation['date_end'])."')";
+		}
+		$obj = $this->db->fetch_object($this->db->query($sql));
+		$occupied = $obj ? (float) $obj->occupied : 0.0;
+		foreach ($planned as $item) {
+			if ((int) $item['resource_id'] === (int) $candidate->resource_id && $this->overlaps($reservation, $item)) {
+				$occupied += (float) $item['capacity_used'];
+			}
+		}
+		return ($occupied + $required) <= $maximumCapacity;
+	}
+
+	/**
+	 * @param array<string,mixed> $left  First interval
+	 * @param array<string,mixed> $right Second interval
+	 * @return bool
+	 */
+	private function overlaps(array $left, array $right)
+	{
+		return (empty($left['date_end']) || empty($right['date_start']) || $right['date_start'] <= $left['date_end'])
+			&& (empty($right['date_end']) || empty($left['date_start']) || $right['date_end'] >= $left['date_start']);
+	}
+
+	/**
+	 * @param object $resource Resource capacity fields
+	 * @return float
+	 */
+	private function getResourceMaximumCapacity($resource)
+	{
+		if ($resource->capacity_mode === 'users') {
+			return (float) $resource->max_users;
+		}
+		if ($resource->capacity_mode === 'volume') {
+			return (float) $resource->metric_value;
+		}
+		return 1.0;
+	}
+}

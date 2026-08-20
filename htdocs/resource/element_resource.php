@@ -30,6 +30,7 @@
 // Load Dolibarr environment
 require '../main.inc.php';
 require_once DOL_DOCUMENT_ROOT.'/resource/class/dolresource.class.php';
+require_once DOL_DOCUMENT_ROOT.'/resource/class/resourcerequirementmanager.class.php';
 require_once DOL_DOCUMENT_ROOT.'/core/lib/functions2.lib.php';
 require_once DOL_DOCUMENT_ROOT.'/fichinter/class/fichinter.class.php';
 if (isModEnabled('project')) {
@@ -80,7 +81,8 @@ $socid                  = GETPOSTINT('socid');
 $direction              = GETPOST('direction', 'alpha');
 $users_per_service_unit = (float) price2num(GETPOST('users_per_service_unit', 'alpha'), 'MS');
 $resource_role          = GETPOST('resource_role', 'alpha') ?: 'capacity';
-$requirement_group      = GETPOST('requirement_group', 'alphanohtml');
+$requirement_group = GETPOST('requirement_group', 'alphanohtml');
+$default_requirement_group = ResourceRequirementManager::getDefaultRequirementGroup($resource_role);
 $quantity_required      = (float) price2num(GETPOST('quantity_required', 'alpha'), 'MS');
 $duration_base          = GETPOSTINT('duration_base');
 $duration_per_unit      = GETPOSTINT('duration_per_unit');

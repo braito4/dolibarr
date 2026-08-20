@@ -81,7 +81,7 @@ class modResource extends DolibarrModules
 		// for default path (eg: /resource/core/xxxxx) (0=disable, 1=enable)
 		// for specific path of parts (eg: /resource/core/modules/barcode)
 		// for specific css file (eg: /resource/css/resource.css.php)
-		$this->module_parts = array();
+		$this->module_parts = array('triggers' => 1);
 
 		// Data directories to create when module is enabled.
 		// Example: this->dirs = array("/resource/temp");
@@ -109,6 +109,7 @@ class modResource extends DolibarrModules
 		// Array to add new pages in new tabs
 		// Example:
 		$this->tabs = array(
+			'product:+resources:Resources:resource:isModEnabled("resource") && $user->hasRight("resource", "read"):/resource/element_resource.php?element=product&element_id=__ID__',
 			//	// To add a new tab identified by code tabname1
 			//	'objecttype:+tabname1:Title1:langfile@resource:$user->rights->resource->read:/resource/mynewtab1.php?id=__ID__',
 			//	// To add another new tab identified by code tabname2

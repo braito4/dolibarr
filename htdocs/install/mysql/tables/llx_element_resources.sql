@@ -47,6 +47,15 @@ CREATE TABLE llx_element_resources
 	capacity_metrics varchar(32) NOT NULL DEFAULT 'units',
 	required_location varchar(255) DEFAULT NULL,
 	selection_policy varchar(24) NOT NULL DEFAULT 'preference_order',
+	service_quantity real DEFAULT NULL,
+	service_duration varchar(16) DEFAULT NULL,
+	capacity_used real DEFAULT NULL,
+	resource_units_used integer DEFAULT NULL,
+	load_volume_used real DEFAULT NULL,
+	payload_weight_used real DEFAULT NULL,
+	date_start datetime DEFAULT NULL,
+	date_end datetime DEFAULT NULL,
+	reservation_status varchar(16) DEFAULT NULL,
   duree				real,               -- total duration of using ressource
   fk_user_create  integer,
   tms             timestamp DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP

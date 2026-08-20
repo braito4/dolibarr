@@ -39,14 +39,6 @@ if (!defined('NOBROWSERNOTIF')) {
 
 // Load Dolibarr environment
 require '../../main.inc.php';
-/**
- * @var Conf $conf
- * @var DoliDB $db
- * @var Translate $langs
- * @var User $user
- *
- * @var string $dolibarr_main_url_root
- */
 require_once DOL_DOCUMENT_ROOT.'/core/lib/company.lib.php';
 require_once DOL_DOCUMENT_ROOT.'/core/lib/payments.lib.php';
 require_once DOL_DOCUMENT_ROOT.'/core/lib/files.lib.php';
@@ -54,6 +46,7 @@ require_once DOL_DOCUMENT_ROOT.'/core/lib/date.lib.php';
 require_once DOL_DOCUMENT_ROOT.'/core/lib/functions2.lib.php';
 require_once DOL_DOCUMENT_ROOT.'/bookcal/class/calendar.class.php';
 require_once DOL_DOCUMENT_ROOT.'/bookcal/class/availabilities.class.php';
+require_once DOL_DOCUMENT_ROOT.'/bookcal/class/bookcalavailabilityprovider.class.php';
 require_once DOL_DOCUMENT_ROOT.'/contact/class/contact.class.php';
 require_once DOL_DOCUMENT_ROOT.'/comm/action/class/actioncomm.class.php';
 require_once DOL_DOCUMENT_ROOT.'/core/lib/public.lib.php';
@@ -62,6 +55,15 @@ require_once DOL_DOCUMENT_ROOT.'/core/lib/public.lib.php';
 if (!isModEnabled('bookcal')) {
 	httponly_accessforbidden('Module Bookcal isn\'t enabled');
 }
+
+/**
+ * @var Conf $conf
+ * @var DoliDB $db
+ * @var Translate $langs
+ * @var User $user
+ *
+ * @var string $dolibarr_main_url_root
+ */
 
 $langs->loadLangs(array("main", "other", "dict", "agenda", "errors", "companies"));
 
@@ -124,7 +126,11 @@ $isdatechosen = false;
 $timebooking = GETPOST("timebooking");
 $datetimebooking = GETPOSTINT("datetimebooking");
 $durationbooking = GETPOSTINT("durationbooking");
+$serviceId = GETPOSTINT('service_id');
 $errmsg = '';
+
+$availabilityProvider = new BookCalAvailabilityProvider($db);
+$bookableServices = $availabilityProvider->getServices($id);
 
 /**
  * Show header for booking
@@ -142,7 +148,7 @@ $errmsg = '';
  */
 function llxHeaderVierge($title, $head = "", $disablejs = 0, $disablehead = 0, $arrayofjs = [], $arrayofcss = [], $ws = '')  // @phan-suppress-current-line PhanRedefineFunction
 {
-	global $langs, $mysoc;
+	global $conf, $langs, $mysoc;
 
 	top_htmlhead($head, $title, $disablejs, $disablehead, $arrayofjs, $arrayofcss); // Show html headers
 
@@ -159,7 +165,7 @@ function llxHeaderVierge($title, $head = "", $disablejs = 0, $disablehead = 0, $
  * Actions
  */
 
-if ($action == 'add') {	// Test on permission not required here (anonymous action protected by mitigation of /public/... urls)
+if ($action == 'add' && $object->status != $object::STATUS_DRAFT) {	// Test on permission not required here (anonymous action protected by mitigation of /public/... urls)
 	$error = 0;
 	$idcontact = 0;
 	$calendar = $object;
@@ -171,103 +177,135 @@ if ($action == 'add') {	// Test on permission not required here (anonymous actio
 		$user = new User($db);
 	}
 
-	if ($object->status != $object::STATUS_DRAFT) {		// If calendar is open
-		$db->begin();
+	$db->begin();
+	$dateend = dol_time_plus_duree(GETPOSTINT('datetimebooking'), GETPOSTINT('durationbooking'), 'i');
+	if (!$availabilityProvider->isAvailable($id, GETPOSTINT('datetimebooking'), $dateend)) {
+		$error++;
+		$errmsg .= $langs->trans('BookCalSlotNoLongerAvailable')."<br>\n";
+	}
+	if (!empty($bookableServices) && ($serviceId <= 0 || !isset($bookableServices[$serviceId]))) {
+		$error++;
+		$errmsg .= $langs->trans('ErrorFieldRequired', $langs->transnoentitiesnoconv('Service'))."<br>\n";
+	}
 
-		if (!GETPOST("lastname")) {
-			$error++;
-			$errmsg .= $langs->trans("ErrorFieldRequired", $langs->transnoentitiesnoconv("Lastname"))."<br>\n";
-		}
-		if (!GETPOST("firstname")) {
-			$error++;
-			$errmsg .= $langs->trans("ErrorFieldRequired", $langs->transnoentitiesnoconv("Firstname"))."<br>\n";
-		}
-		if (!GETPOST("email")) {
-			$error++;
-			$errmsg .= $langs->trans("ErrorFieldRequired", $langs->transnoentitiesnoconv("Email"))."<br>\n";
-		}
+	if (!GETPOST("lastname")) {
+		$error++;
+		$errmsg .= $langs->trans("ErrorFieldRequired", $langs->transnoentitiesnoconv("Lastname"))."<br>\n";
+	}
+	if (!GETPOST("firstname")) {
+		$error++;
+		$errmsg .= $langs->trans("ErrorFieldRequired", $langs->transnoentitiesnoconv("Firstname"))."<br>\n";
+	}
+	if (!GETPOST("email")) {
+		$error++;
+		$errmsg .= $langs->trans("ErrorFieldRequired", $langs->transnoentitiesnoconv("Email"))."<br>\n";
+	}
 
-		if (!$error) {
-			$sql = "SELECT s.rowid";
-			$sql .= " FROM ".MAIN_DB_PREFIX."socpeople as s";
-			$sql .= " WHERE s.lastname = '".$db->escape(GETPOST("lastname"))."'";
-			$sql .= " AND s.firstname = '".$db->escape(GETPOST("firstname"))."'";
-			$sql .= " AND s.email = '".$db->escape(GETPOST("email"))."'";
-			$resql = $db->query($sql);
+	if (!$error) {
+		$sql = "SELECT s.rowid";
+		$sql .= " FROM ".MAIN_DB_PREFIX."socpeople as s";
+		$sql .= " WHERE s.lastname = '".$db->escape(GETPOST("lastname"))."'";
+		$sql .= " AND s.firstname = '".$db->escape(GETPOST("firstname"))."'";
+		$sql .= " AND s.email = '".$db->escape(GETPOST("email"))."'";
+		$resql = $db->query($sql);
 
-			if ($resql) {
-				$num = $db->num_rows($resql);
-				if ($num > 0) {
-					$obj = $db->fetch_object($resql);
-					$idcontact = $obj->rowid;
-					$contact->fetch($idcontact);
+		if ($resql) {
+			$num = $db->num_rows($resql);
+			if ($num > 0) {
+				$obj = $db->fetch_object($resql);
+				$idcontact = $obj->rowid;
+				$contact->fetch($idcontact);
+			} else {
+				$contact->lastname = GETPOST("lastname");
+				$contact->firstname = GETPOST("firstname");
+				$contact->email = GETPOST("email");
+				$contact->ip = getUserRemoteIP();
+
+				if (checkNbPostsForASpeceificIp($contact, $nb_post_max) <= 0) {
+					$error++;
+					$errmsg .= implode('<br>', $contact->errors);
 				} else {
-					$contact->lastname = GETPOST("lastname");
-					$contact->firstname = GETPOST("firstname");
-					$contact->email = GETPOST("email");
-					$contact->ip = getUserRemoteIP();
-
-					if (checkNbPostsForASpeceificIp($contact, $nb_post_max) <= 0) {
+					$result = $contact->create($user);
+					if ($result < 0) {
 						$error++;
-						$errmsg .= implode('<br>', $contact->errors);
-					} else {
-						$result = $contact->create($user);
-						if ($result < 0) {
-							$error++;
-							$errmsg .= $contact->error." ".implode(',', $contact->errors);
-						}
+						$errmsg .= $contact->error." ".implode(',', $contact->errors);
 					}
 				}
-			} else {
-				$error++;
-				$errmsg .= $db->lasterror();
 			}
-		}
-
-		if (!$error) {
-			$dateend = dol_time_plus_duree(GETPOSTINT("datetimebooking"), GETPOSTINT("durationbooking"), 'i');
-
-			$actioncomm->label = $langs->trans("BookcalBookingTitle");
-			$actioncomm->type = 'AC_RDV';
-			$actioncomm->type_id = 5;
-			$actioncomm->datep = GETPOSTINT("datetimebooking");
-			$actioncomm->datef = $dateend;
-			$actioncomm->note_private = GETPOST("description");
-			$actioncomm->percentage = -1;
-			$actioncomm->fk_bookcal_calendar = $id;
-			$actioncomm->userownerid = $calendar->visibility;
-			$actioncomm->contact_id = $contact->id;
-			$actioncomm->socpeopleassigned = [
-				$contact->id => [
-					'id' => $contact->id,
-					'mandatory' => 0,
-					'answer_status' => 0,
-					'transparency' => 0,
-				]
-			];
-			$actioncomm->ip = getUserRemoteIP();
-			if (checkNbPostsForASpeceificIp($actioncomm, $nb_post_max) <= 0) {
-				$error++;
-				$errmsg .= implode('<br>', $actioncomm->errors);
-			} else {
-				$result = $actioncomm->create($user);
-				if ($result < 0) {
-					$error++;
-					$errmsg .= $actioncomm->error." ".implode(',', $actioncomm->errors);
-				}
-			}
-		}
-
-		if (!$error) {
-			$db->commit();
-			$action = 'afteradd';
 		} else {
-			$db->rollback();
-			$action = 'create';
+			$error++;
+			$errmsg .= $db->lasterror();
 		}
+	}
+
+	if (!$error) {
+		$actioncomm->label = $langs->trans("BookcalBookingTitle");
+		if ($serviceId > 0 && isset($bookableServices[$serviceId])) {
+			$actioncomm->label = $bookableServices[$serviceId]['ref'].' - '.$bookableServices[$serviceId]['label'];
+			$actioncomm->fk_element = $serviceId;
+			$actioncomm->elementtype = 'product';
+		}
+		$actioncomm->type = 'AC_RDV';
+		$actioncomm->type_id = 5;
+		$actioncomm->datep = GETPOSTINT("datetimebooking");
+		$actioncomm->datef = $dateend;
+		$actioncomm->note_private = GETPOST("description");
+		$actioncomm->percentage = -1;
+		$actioncomm->fk_bookcal_calendar = $id;
+		$actioncomm->userownerid = $calendar->visibility;
+		$actioncomm->contact_id = $contact->id;
+		$actioncomm->socpeopleassigned = [
+			$contact->id => [
+				'id' => $contact->id,
+				'mandatory' => 0,
+				'answer_status' => 0,
+				'transparency' => 0,
+			]
+		];
+		$actioncomm->ip = getUserRemoteIP();
+		if (checkNbPostsForASpeceificIp($actioncomm, $nb_post_max) <= 0) {
+			$error++;
+			$errmsg .= implode('<br>', $actioncomm->errors);
+		} else {
+			$result = $actioncomm->create($user);
+			if ($result < 0) {
+				$error++;
+				$errmsg .= $actioncomm->error." ".implode(',', $actioncomm->errors);
+			}
+		}
+	}
+
+	if (!$error) {
+		$reservationManager = new ResourceReservationManager($db);
+		$assignmentId = $reservationManager->createAssignment(array(
+			'element_type' => 'action',
+			'element_id' => $actioncomm->id,
+			'resource_type' => 'bookcal_calendar',
+			'resource_id' => $id,
+			'resource_role' => 'capacity',
+			'capacity_used' => 1,
+			'maximum_capacity' => 1,
+			'date_start' => $db->idate(GETPOSTINT('datetimebooking')),
+			'date_end' => $db->idate($dateend),
+			'reservation_status' => ResourceReservationManager::STATUS_CONFIRMED,
+		), $user);
+		if ($assignmentId < 0) {
+			$error++;
+			$errmsg .= $langs->trans('BookCalSlotNoLongerAvailable')."<br>\n";
+		}
+	}
+
+	if (!$error) {
+		$db->commit();
+		$action = 'afteradd';
 	} else {
+		$db->rollback();
 		$action = 'create';
 	}
+}
+
+if ($action == 'add') {
+	$action = 'create';
 }
 
 
@@ -310,7 +348,7 @@ if ($action == 'afteradd') {
 	print '<h2>';
 	print $langs->trans("BookingSuccessfullyBooked");
 	print '</h2>';
-	print $langs->trans("BookingReservationHourAfter", dol_print_date(GETPOSTINT("datetimebooking"), "dayhourtext"));
+	print $langs->trans("BookingReservationHourAfter", $availabilityProvider->formatLocalTimestamp($id, GETPOSTINT('datetimebooking')));
 } else {
 	$param = '';
 
@@ -349,11 +387,10 @@ if ($action == 'afteradd') {
 			$timebookingarray = explode(" - ", $timebooking);
 			$timestartarray = explode(":", $timebookingarray[0]);
 			$timeendarray = explode(":", $timebookingarray[1]);
-			$datetimebooking = dol_time_plus_duree($datetimechosen, intval($timestartarray[0]), "h");
-			$datetimebooking = dol_time_plus_duree($datetimebooking, intval($timestartarray[1]), "i");
+			$datetimebooking = $availabilityProvider->getLocalTimestamp($id, $datetimechosen, sprintf('%02d:%02d', (int) $timestartarray[0], (int) $timestartarray[1]));
 		}
-		print '<span>'.img_picto("", "calendar")." ".dol_print_date($datetimebooking, 'dayhourtext').'</span>';
-		print '<div class="center"><a href="'.$_SERVER["PHP_SELF"].'?id=1&year=2024&month=2" class="small">('.$langs->trans("SelectANewDate").')</a></div>';
+		print '<span>'.img_picto("", "calendar").' '.$availabilityProvider->formatLocalTimestamp($id, $datetimebooking).'</span>';
+		print '<div class="center"><a href="'.dol_escape_htmltag($_SERVER["PHP_SELF"]).'?id='.$id.'&year='.$year.'&month='.$month.'" class="small">('.$langs->trans("SelectANewDate").')</a></div>';
 		print '</td>';
 
 		print '<td>';
@@ -365,6 +402,17 @@ if ($action == 'afteradd') {
 		print '<input type="hidden" name="datechosen" value="'.$datechosen.'">';
 		print '<input type="hidden" name="id" value="'.$id.'">';
 		print '<input type="hidden" name="durationbooking" value="'.$durationbooking.'">';
+
+		if (!empty($bookableServices)) {
+			print '<tr><td><label for="service_id">'.$langs->trans('Service').'*</label><br>';
+			print '<select name="service_id" id="service_id" class="minwidth200" required>';
+			print '<option value="">'.$langs->trans('Select').'</option>';
+			foreach ($bookableServices as $bookableService) {
+				$selected = $serviceId === $bookableService['id'] ? ' selected' : '';
+				print '<option value="'.$bookableService['id'].'"'.$selected.'>'.dol_escape_htmltag($bookableService['ref'].' - '.$bookableService['label']).'</option>';
+			}
+			print '</select></td></tr>';
+		}
 
 		// Lastname
 		print '<tr><td><input autofocus type="text" name="lastname" class="minwidth150" placeholder="'.dol_escape_htmltag($langs->trans("Lastname").'*').'" value="'.dol_escape_htmltag(GETPOST('lastname')).'"></td></tr>'."\n";
@@ -544,6 +592,9 @@ if ($action == 'afteradd') {
 			let mins = hour.getMinutes().toString().padStart(2, "0"); // Formatter pour obtenir deux chiffres
 
 			timerange = index + " - " + `${hours}:${mins}`;
+			if (hour.getDate() > 1) {
+				timerange += " (+1 day)";
+			}
 			str += \'<input class="button btnsubmitbooking \'+(isalreadybooked == true ? "btnbookcalbooked" : "")+\'" type="submit" name="timebooking" value="\'+timerange+\'" data-duration="\'+duration+\'"><br>\';
 		}
 

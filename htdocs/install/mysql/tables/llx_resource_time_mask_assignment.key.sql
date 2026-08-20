@@ -1,0 +1,3 @@
+ALTER TABLE llx_resource_time_mask_assignment ADD UNIQUE INDEX uk_resource_time_mask_assignment_resource (entity, resource_type, resource_id);
+ALTER TABLE llx_resource_time_mask_assignment ADD INDEX idx_resource_time_mask_assignment_mask (fk_time_mask);
+ALTER TABLE llx_resource_time_mask_assignment ADD CONSTRAINT fk_resource_time_mask_assignment_mask FOREIGN KEY (fk_time_mask) REFERENCES llx_resource_time_mask (rowid);

@@ -30,11 +30,13 @@
  * @var string $element
  * @var int $element_id
  * @var string $element_ref
+ * @var string $default_requirement_group
  */
 '
 @phan-var-force string $element
 @phan-var-force int $element_id
 @phan-var-force string $element_ref
+@phan-var-force string $default_requirement_group
 @phan-var-force Translate $langs
 ';
 // Protection to avoid direct call of template
@@ -113,7 +115,13 @@ if ($element != 'product' && $element != 'service') {
 	$out .= '<div class="divsearchfield paddingtop paddingbottom valignmiddle inline-block"><label for="duration_per_unit">'.$resourceHelpLabel('DurationPerUnitMinutes').'</label> <input type="number" min="0" class="width50" name="duration_per_unit" value="'.GETPOSTINT('duration_per_unit').'"></div>';
 	$out .= '<div class="divsearchfield paddingtop paddingbottom valignmiddle inline-block"><label for="setup_duration">'.$resourceHelpLabel('SetupDurationMinutes').'</label> <input type="number" min="0" class="width50" name="setup_duration" value="'.GETPOSTINT('setup_duration').'"></div>';
 	$out .= '<div class="divsearchfield paddingtop paddingbottom valignmiddle inline-block"><label for="cleanup_duration">'.$resourceHelpLabel('CleanupDurationMinutes').'</label> <input type="number" min="0" class="width50" name="cleanup_duration" value="'.GETPOSTINT('cleanup_duration').'"></div>';
-	$out .= '<div class="divsearchfield paddingtop paddingbottom valignmiddle inline-block"><label for="requirement_group">'.$resourceHelpLabel('RequirementGroup').'</label> <input type="text" class="width75" name="requirement_group" value="'.dol_escape_htmltag(GETPOST('requirement_group', 'alphanohtml')).'"></div>';
+	$requirementGroupValue = GETPOSTISSET('requirement_group')
+		? GETPOST('requirement_group', 'alphanohtml')
+		: ($default_requirement_group ?? 'preferred_capacity');
+	$out .= '<div class="divsearchfield paddingtop paddingbottom valignmiddle inline-block">';
+	$out .= '<label for="requirement_group">'.$resourceHelpLabel('RequirementGroup').'</label> ';
+	$out .= '<input type="text" class="width150" name="requirement_group" value="'.dol_escape_htmltag($requirementGroupValue).'" placeholder="preferred_capacity">';
+	$out .= '</div>';
 	$out .= '<div class="divsearchfield paddingtop paddingbottom valignmiddle inline-block"><label>'.$resourceHelpLabel('Mandatory').'</label> <input type="checkbox" name="mandatory" value="1" checked></div>';
 	$out .= '<div class="divsearchfield paddingtop paddingbottom valignmiddle inline-block"><label>'.$resourceHelpLabel('SimultaneousRequirement').'</label> <input type="checkbox" name="simultaneous" value="1" checked></div>';
 	$out .= '<div class="divsearchfield paddingtop paddingbottom valignmiddle inline-block"><label>'.$resourceHelpLabel('AllowSplitRequirement').'</label> <input type="checkbox" name="allow_split" value="1"></div>';
