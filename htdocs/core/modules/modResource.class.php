@@ -81,7 +81,7 @@ class modResource extends DolibarrModules
 		// for default path (eg: /resource/core/xxxxx) (0=disable, 1=enable)
 		// for specific path of parts (eg: /resource/core/modules/barcode)
 		// for specific css file (eg: /resource/css/resource.css.php)
-		$this->module_parts = array();
+		$this->module_parts = array('triggers' => 1);
 
 		// Data directories to create when module is enabled.
 		// Example: this->dirs = array("/resource/temp");
